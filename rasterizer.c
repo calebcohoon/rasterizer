@@ -8,6 +8,12 @@
 #define SW 320    // Screen width
 #define SH 200    // Screen height
 
+#define SWAP_VECTOR2(a, b) do { \
+    struct vector2 temp = (a);  \
+    (a) = (b);                 \
+    (b) = temp;                \
+} while(0)
+
 struct vector2
 {
     int x;
@@ -109,6 +115,10 @@ int *interpolate(int i0, int d0, int i1, int d1)
 
     if (i0 == i1) {
         values = malloc(sizeof(int));
+
+        if (values == 0) {
+            return 0;
+        }
         
         values[0] = d0;
         
@@ -116,6 +126,11 @@ int *interpolate(int i0, int d0, int i1, int d1)
     }
 
     values = malloc(abs(i1 - i0) * sizeof(int));
+
+    if (values == 0) {
+        return 0;
+    }
+
     a = (d1 - d0) / (float)(i1 - i0);
     d = d0;
 
@@ -137,26 +152,28 @@ void draw_line(struct vector2 *p0, struct vector2 *p1, unsigned char color)
 
     if (abs(p1_local.x - p0_local.x) > abs(p1_local.y - p0_local.y)) {
         if (p0_local.x > p1_local.x) {
-            struct vector2 temp = p0_local;
-            
-            p0_local = p1_local;
-            p1_local = temp;
+            SWAP_VECTOR2(p0_local, p1_local);
         }
 
         slope_values = interpolate(p0_local.x, p0_local.y, p1_local.x, p1_local.y);
+
+        if (slope_values == 0) {
+            return;
+        }
 
         for (x = p0_local.x; x < p1_local.x; x++) {
             set_pixel(x, slope_values[x - p0_local.x], color);
         }
     } else {
         if (p0_local.y > p1_local.y) {
-            struct vector2 temp = p0_local;
-            
-            p0_local = p1_local;
-            p1_local = temp;
+            SWAP_VECTOR2(p0_local, p1_local);
         }
 
         slope_values = interpolate(p0_local.y, p0_local.x, p1_local.y, p1_local.x);
+
+        if (slope_values == 0) {
+            return;
+        }
 
         for (y = p0_local.y; y < p1_local.y; y++) {
             set_pixel(slope_values[y - p0_local.y], y, color);
@@ -176,14 +193,9 @@ void draw_wireframe_triangle(struct vector2 *p0, struct vector2 *p1, struct vect
 
 int main(void)
 {
-    struct vector2 p0, p1, p2;
-
-    p0.x = -50;
-    p0.y = -62;
-    p1.x = 50;
-    p1.y = 12;
-    p2.x = 5;
-    p2.y = 62;
+    struct vector2 p0 = { -50, -62 };
+    struct vector2 p1 = { 50, 12 };
+    struct vector2 p2 = { 5, 62 };
 
     set_mode(0x13);
 
