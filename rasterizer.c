@@ -166,24 +166,28 @@ void draw_line(struct vector2 *p0, struct vector2 *p1, unsigned char color)
     free(slope_values);
 }
 
+void draw_wireframe_triangle(struct vector2 *p0, struct vector2 *p1, struct vector2 *p2,
+    unsigned char color) 
+{
+    draw_line(p0, p1, color);
+    draw_line(p1, p2, color);
+    draw_line(p2, p0, color);
+}
+
 int main(void)
 {
-    struct vector2 p0, p1, p2, p3;
+    struct vector2 p0, p1, p2;
 
-    p0.x = -100;
-    p0.y = -50;
-    p1.x = 120;
-    p1.y = 60;
-
-    p2.x = -25;
-    p2.y = -100;
-    p3.x = 30;
-    p3.y = 120;
+    p0.x = -50;
+    p0.y = -62;
+    p1.x = 50;
+    p1.y = 12;
+    p2.x = 5;
+    p2.y = 62;
 
     set_mode(0x13);
 
-    draw_line(&p0, &p1, 15);
-    draw_line(&p2, &p3, 15);
+    draw_wireframe_triangle(&p0, &p1, &p2, 15);
 
     getch();
 
