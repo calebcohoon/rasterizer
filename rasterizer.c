@@ -1,6 +1,5 @@
 #include <conio.h>
 #include <dos.h>
-#include <i86.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -18,6 +17,7 @@
 struct vector2 {
   int x;
   int y;
+  float h;
 };
 
 struct vector3 {
@@ -26,17 +26,58 @@ struct vector3 {
   int z;
 };
 
+// Build an optimized palette for the main colors being used
+void init_palette() {
+  int color, shade;
+  unsigned char index;
+  float intensity;
+  unsigned char base_colors[1][3] = {
+      {0, 63, 0} // Green
+  };
+
+  for (color = 0; color < 1; color++) {
+    for (shade = 0; shade < 256; shade++) {
+      index = color * 256 + shade;
+      intensity = shade / 255.0f;
+
+      outp(0x3C8, index);
+
+      // For the very last shade, just make it white
+      // so we have a color for the background
+      if (color == 0 && shade == 255) {
+        outp(0x3C9, 63);
+        outp(0x3C9, 63);
+        outp(0x3C9, 63);
+      } else {
+        outp(0x3C9, (unsigned char)(base_colors[color][0] * intensity));
+        outp(0x3C9, (unsigned char)(base_colors[color][1] * intensity));
+        outp(0x3C9, (unsigned char)(base_colors[color][2] * intensity));
+      }
+    }
+  }
+}
+
+unsigned char shade_color(unsigned char color, float intensity) {
+  unsigned char shade;
+  if (intensity > 1.0f)
+    intensity = 1.0f;
+  if (intensity < 0.0f)
+    intensity = 0.0f;
+
+  shade = (unsigned char)(intensity * 255.0f);
+  return color * 256 + shade;
+}
+
 void set_mode(unsigned char mode) {
   union REGS regs;
 
-  regs.h.ah = 0;
-  regs.h.al = mode;
+  regs.w.ax = mode;
 
-  int86(0x10, &regs, &regs);
+  int386(0x10, &regs, &regs);
 }
 
 void set_pixel(int x, int y, char color) {
-  char far *screen = MK_FP(0xA000, 0);
+  unsigned char *screen = (unsigned char *)0xA0000;
   int ax, ay;
 
   ax = SW / 2 + x;
@@ -97,9 +138,10 @@ float vec3_dot(struct vector3 *a, struct vector3 *b) {
   return (a->x * b->x) + (a->y * b->y) + (a->z * b->z);
 }
 
-void interpolate(int i0, int d0, int i1, int d1, int *arry, int *o_len) {
-  float a, d;
-  int i, idx = 0;
+void interpolate(float i0, float d0, float i1, float d1, float *arry,
+                 int *o_len) {
+  float a, d, i;
+  int idx = 0;
 
   if (i0 == i1) {
     arry[0] = d0;
@@ -119,7 +161,8 @@ void interpolate(int i0, int d0, int i1, int d1, int *arry, int *o_len) {
   *o_len = idx;
 }
 
-void concat_sides(int *x01, int x01_len, int *x12, int x12_len, int *x012) {
+void concat_sides(float *x01, int x01_len, float *x12, int x12_len,
+                  float *x012) {
   int i;
 
   for (i = 0; i <= x01_len - 1; i++) {
@@ -134,7 +177,8 @@ void concat_sides(int *x01, int x01_len, int *x12, int x12_len, int *x012) {
 void draw_line(struct vector2 *p0, struct vector2 *p1, unsigned char color) {
   struct vector2 p0_local = *p0;
   struct vector2 p1_local = *p1;
-  int x, y, len, slope_values[SW];
+  int x, y, len;
+  float slope_values[SW];
   float a;
 
   if (abs(p1_local.x - p0_local.x) > abs(p1_local.y - p0_local.y)) {
@@ -174,8 +218,9 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
   struct vector2 p0_local = *p0;
   struct vector2 p1_local = *p1;
   struct vector2 p2_local = *p2;
-  int m, x, y, *x_left, *x_right;
-  int x01[SH], x12[SH], x02[SH], x012[SH];
+  int m, x, y;
+  float *x_left, *x_right;
+  float x01[SH], x12[SH], x02[SH], x012[SH];
   int x01_len, x12_len, x02_len;
 
   if (p1_local.y < p0_local.y) {
@@ -213,15 +258,82 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
   }
 }
 
+void draw_shaded_triangle(struct vector2 *p0, struct vector2 *p1,
+                          struct vector2 *p2, unsigned char color) {
+  struct vector2 p0_local = *p0;
+  struct vector2 p1_local = *p1;
+  struct vector2 p2_local = *p2;
+  int m, x, y;
+  float *x_left, *x_right, *h_left, *h_right;
+  float x01[SH], x12[SH], x02[SH], x012[SH];
+  float h01[SH], h12[SH], h02[SH], h012[SH];
+  int x01_len, x12_len, x02_len;
+  int h01_len, h12_len, h02_len;
+
+  if (p1_local.y < p0_local.y) {
+    SWAP_VECTOR2(p1_local, p0_local);
+  }
+
+  if (p2_local.y < p0_local.y) {
+    SWAP_VECTOR2(p2_local, p0_local);
+  }
+
+  if (p2_local.y < p1_local.y) {
+    SWAP_VECTOR2(p2_local, p1_local);
+  }
+
+  interpolate(p0_local.y, p0_local.x, p1_local.y, p1_local.x, &x01, &x01_len);
+  interpolate(p0_local.y, p0_local.h, p1_local.y, p1_local.h, &h01, &h01_len);
+
+  interpolate(p1_local.y, p1_local.x, p2_local.y, p2_local.x, &x12, &x12_len);
+  interpolate(p1_local.y, p1_local.h, p2_local.y, p2_local.h, &h12, &h12_len);
+
+  interpolate(p0_local.y, p0_local.x, p2_local.y, p2_local.x, &x02, &x02_len);
+  interpolate(p0_local.y, p0_local.h, p2_local.y, p2_local.h, &h02, &h02_len);
+
+  concat_sides(&x01, x01_len, &x12, x12_len, &x012);
+  concat_sides(&h01, h01_len, &h12, h12_len, &h012);
+
+  m = x02_len / 2;
+
+  if (x02[m] < x012[m]) {
+    x_left = x02;
+    h_left = h02;
+    x_right = x012;
+    h_right = h012;
+  } else {
+    x_left = x012;
+    h_left = h012;
+    x_right = x02;
+    h_right = h02;
+  }
+
+  for (y = p0_local.y; y <= p2_local.y; y++) {
+    int xl = x_left[y - p0_local.y];
+    int xr = x_right[y - p0_local.y];
+    float h_segment[SW];
+    int h_segment_len;
+
+    interpolate(xl, h_left[y - p0_local.y], xr, h_right[y - p0_local.y],
+                &h_segment, &h_segment_len);
+
+    for (x = xl; x <= xr; x++) {
+      set_pixel(x, y, shade_color(color, h_segment[x - xl]));
+    }
+  }
+}
+
 int main(void) {
-  struct vector2 p0 = {-50, -62};
-  struct vector2 p1 = {50, 12};
-  struct vector2 p2 = {5, 62};
+  struct vector2 p0 = {-50, -62, 0.3f};
+  struct vector2 p1 = {50, 12, 0.1f};
+  struct vector2 p2 = {5, 62, 1.0f};
 
   set_mode(0x13);
 
-  draw_filled_triangle(&p0, &p1, &p2, 2);
-  draw_wireframe_triangle(&p0, &p1, &p2, 15);
+  init_palette();
+
+  draw_shaded_triangle(&p0, &p1, &p2, 0);
+  draw_wireframe_triangle(&p0, &p1, &p2, shade_color(0, 255));
 
   getch();
 
