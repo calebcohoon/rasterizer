@@ -6,6 +6,8 @@
 #define INF 32767 // Infinity for 16 bit compilers
 #define SW 320    // Screen width
 #define SH 200    // Screen height
+#define VIEWPORT_SIZE 1
+#define PROJ_PLANE_Z 1.0f
 
 #define SWAP_VECTOR2(a, b)                                                     \
   do {                                                                         \
@@ -21,9 +23,9 @@ struct vector2 {
 };
 
 struct vector3 {
-  int x;
-  int y;
-  int z;
+  float x;
+  float y;
+  float z;
 };
 
 // Build an optimized palette for the main colors being used
@@ -189,7 +191,7 @@ void draw_line(struct vector2 *p0, struct vector2 *p1, unsigned char color) {
     interpolate(p0_local.x, p0_local.y, p1_local.x, p1_local.y, &slope_values,
                 &len);
 
-    for (x = p0_local.x; x < p1_local.x; x++) {
+    for (x = p0_local.x; x <= p1_local.x; x++) {
       set_pixel(x, slope_values[x - p0_local.x], color);
     }
   } else {
@@ -200,7 +202,7 @@ void draw_line(struct vector2 *p0, struct vector2 *p1, unsigned char color) {
     interpolate(p0_local.y, p0_local.x, p1_local.y, p1_local.x, &slope_values,
                 &len);
 
-    for (y = p0_local.y; y < p1_local.y; y++) {
+    for (y = p0_local.y; y <= p1_local.y; y++) {
       set_pixel(slope_values[y - p0_local.y], y, color);
     }
   }
@@ -323,10 +325,44 @@ void draw_shaded_triangle(struct vector2 *p0, struct vector2 *p1,
   }
 }
 
+struct vector2 viewport_to_canvas(float x, float y) {
+  struct vector2 result;
+
+  result.x = x * (SW / VIEWPORT_SIZE);
+  result.y = y * (SH / VIEWPORT_SIZE);
+
+  return result;
+}
+
+struct vector2 project_vertex(struct vector3 *v) {
+  return viewport_to_canvas(v->x * PROJ_PLANE_Z / v->z,
+                            v->y * PROJ_PLANE_Z / v->z);
+}
+
 int main(void) {
   struct vector2 p0 = {-50, -62, 0.3f};
   struct vector2 p1 = {50, 12, 0.1f};
   struct vector2 p2 = {5, 62, 1.0f};
+
+  struct vector3 vAf = {-0.1f, 0.1f, 2};
+  struct vector3 vBf = {0.1f, 0.1f, 2};
+  struct vector3 vCf = {0.1f, -0.1f, 2};
+  struct vector3 vDf = {-0.1f, -0.1f, 2};
+
+  struct vector3 vAb = {-0.1f, 0.1f, 1};
+  struct vector3 vBb = {0.1f, 0.1f, 1};
+  struct vector3 vCb = {0.1f, -0.1f, 1};
+  struct vector3 vDb = {-0.1f, -0.1f, 1};
+
+  struct vector2 pAf = project_vertex(&vAf);
+  struct vector2 pBf = project_vertex(&vBf);
+  struct vector2 pCf = project_vertex(&vCf);
+  struct vector2 pDf = project_vertex(&vDf);
+
+  struct vector2 pAb = project_vertex(&vAb);
+  struct vector2 pBb = project_vertex(&vBb);
+  struct vector2 pCb = project_vertex(&vCb);
+  struct vector2 pDb = project_vertex(&vDb);
 
   set_mode(0x13);
 
@@ -334,6 +370,21 @@ int main(void) {
 
   draw_shaded_triangle(&p0, &p1, &p2, 0);
   draw_wireframe_triangle(&p0, &p1, &p2, shade_color(0, 255));
+
+  draw_line(&pAf, &pBf, shade_color(0, 255));
+  draw_line(&pBf, &pCf, shade_color(0, 255));
+  draw_line(&pCf, &pDf, shade_color(0, 255));
+  draw_line(&pDf, &pAf, shade_color(0, 255));
+
+  draw_line(&pAb, &pBb, shade_color(0, 255));
+  draw_line(&pBb, &pCb, shade_color(0, 255));
+  draw_line(&pCb, &pDb, shade_color(0, 255));
+  draw_line(&pDb, &pAb, shade_color(0, 255));
+
+  draw_line(&pAf, &pAb, shade_color(0, 255));
+  draw_line(&pBf, &pBb, shade_color(0, 255));
+  draw_line(&pCf, &pCb, shade_color(0, 255));
+  draw_line(&pDf, &pDb, shade_color(0, 255));
 
   getch();
 
