@@ -1,8 +1,8 @@
-CC = wcl
-CFLAGS = -fpi -d2 -mt -0
+CC = wcl386
+CFLAGS = -mf -3 -d2
 SRCS = RASTER~1.C
 OBJS = $(SRCS:.c=.obj)
-EXEC = RASTER~1.COM
+EXEC = RASTER~1.EXE
 
 $(EXEC): $(OBJS)
     $(CC) $(CFLAGS) $(OBJS)
@@ -12,4 +12,4 @@ $(EXEC): $(OBJS)
 
 clean:
     del *.obj
-    del *.com
+    del *.exe
