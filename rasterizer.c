@@ -33,20 +33,21 @@ void init_palette() {
   int color, shade;
   unsigned char index;
   float intensity;
-  unsigned char base_colors[1][3] = {
-      {0, 63, 0} // Green
-  };
+  unsigned char base_colors[4][3] = {{63, 0, 0}, // Red
+                                     {0, 63, 0}, // Green
+                                     {0, 0, 63}, // Blue
+                                     {63, 63, 0}};
 
-  for (color = 0; color < 1; color++) {
-    for (shade = 0; shade < 256; shade++) {
-      index = color * 256 + shade;
-      intensity = shade / 255.0f;
+  for (color = 0; color < 4; color++) {
+    for (shade = 0; shade < 64; shade++) {
+      index = color * 64 + shade;
+      intensity = shade / 63.0f;
 
       outp(0x3C8, index);
 
       // For the very last shade, just make it white
       // so we have a color for the background
-      if (color == 0 && shade == 255) {
+      if (color == 3 && shade == 63) {
         outp(0x3C9, 63);
         outp(0x3C9, 63);
         outp(0x3C9, 63);
@@ -66,8 +67,8 @@ unsigned char shade_color(unsigned char color, float intensity) {
   if (intensity < 0.0f)
     intensity = 0.0f;
 
-  shade = (unsigned char)(intensity * 255.0f);
-  return color * 256 + shade;
+  shade = (unsigned char)(intensity * 63.0f);
+  return color * 64 + shade;
 }
 
 void set_mode(unsigned char mode) {
@@ -160,7 +161,7 @@ void interpolate(float i0, float d0, float i1, float d1, float *arry,
     idx++;
   }
 
-  *o_len = idx;
+  *o_len = idx - 1;
 }
 
 void concat_sides(float *x01, int x01_len, float *x12, int x12_len,
@@ -328,8 +329,8 @@ void draw_shaded_triangle(struct vector2 *p0, struct vector2 *p1,
 struct vector2 viewport_to_canvas(float x, float y) {
   struct vector2 result;
 
-  result.x = x * (SW / VIEWPORT_SIZE);
-  result.y = y * (SH / VIEWPORT_SIZE);
+  result.x = x * SW / VIEWPORT_SIZE;
+  result.y = y * SH / VIEWPORT_SIZE;
 
   return result;
 }
@@ -344,15 +345,15 @@ int main(void) {
   struct vector2 p1 = {50, 12, 0.1f};
   struct vector2 p2 = {5, 62, 1.0f};
 
-  struct vector3 vAf = {-0.1f, 0.1f, 2};
-  struct vector3 vBf = {0.1f, 0.1f, 2};
-  struct vector3 vCf = {0.1f, -0.1f, 2};
-  struct vector3 vDf = {-0.1f, -0.1f, 2};
+  struct vector3 vAf = {-2, -0.5f, 5};
+  struct vector3 vBf = {-2, 0.5f, 5};
+  struct vector3 vCf = {-1, 0.5f, 5};
+  struct vector3 vDf = {-1, -0.5f, 5};
 
-  struct vector3 vAb = {-0.1f, 0.1f, 1};
-  struct vector3 vBb = {0.1f, 0.1f, 1};
-  struct vector3 vCb = {0.1f, -0.1f, 1};
-  struct vector3 vDb = {-0.1f, -0.1f, 1};
+  struct vector3 vAb = {-2, -0.5f, 6};
+  struct vector3 vBb = {-2, 0.5f, 6};
+  struct vector3 vCb = {-1, 0.5f, 6};
+  struct vector3 vDb = {-1, -0.5f, 6};
 
   struct vector2 pAf = project_vertex(&vAf);
   struct vector2 pBf = project_vertex(&vBf);
@@ -368,23 +369,23 @@ int main(void) {
 
   init_palette();
 
-  draw_shaded_triangle(&p0, &p1, &p2, 0);
-  draw_wireframe_triangle(&p0, &p1, &p2, shade_color(0, 255));
+  draw_shaded_triangle(&p0, &p1, &p2, 1);
+  draw_wireframe_triangle(&p0, &p1, &p2, shade_color(3, 63));
 
-  draw_line(&pAf, &pBf, shade_color(0, 255));
-  draw_line(&pBf, &pCf, shade_color(0, 255));
-  draw_line(&pCf, &pDf, shade_color(0, 255));
-  draw_line(&pDf, &pAf, shade_color(0, 255));
+  draw_line(&pAf, &pBf, shade_color(2, 63));
+  draw_line(&pBf, &pCf, shade_color(2, 63));
+  draw_line(&pCf, &pDf, shade_color(2, 63));
+  draw_line(&pDf, &pAf, shade_color(2, 63));
 
-  draw_line(&pAb, &pBb, shade_color(0, 255));
-  draw_line(&pBb, &pCb, shade_color(0, 255));
-  draw_line(&pCb, &pDb, shade_color(0, 255));
-  draw_line(&pDb, &pAb, shade_color(0, 255));
+  draw_line(&pAb, &pBb, shade_color(0, 63));
+  draw_line(&pBb, &pCb, shade_color(0, 63));
+  draw_line(&pCb, &pDb, shade_color(0, 63));
+  draw_line(&pDb, &pAb, shade_color(0, 63));
 
-  draw_line(&pAf, &pAb, shade_color(0, 255));
-  draw_line(&pBf, &pBb, shade_color(0, 255));
-  draw_line(&pCf, &pCb, shade_color(0, 255));
-  draw_line(&pDf, &pDb, shade_color(0, 255));
+  draw_line(&pAf, &pAb, shade_color(1, 63));
+  draw_line(&pBf, &pBb, shade_color(1, 63));
+  draw_line(&pCf, &pCb, shade_color(1, 63));
+  draw_line(&pDf, &pDb, shade_color(1, 63));
 
   getch();
 
