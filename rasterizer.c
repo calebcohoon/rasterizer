@@ -28,26 +28,30 @@ struct vector3 {
   float z;
 };
 
+struct triangle {
+  int vertex_index[3];
+  unsigned char color;
+};
+
 // Build an optimized palette for the main colors being used
 void init_palette() {
   int color, shade;
   unsigned char index;
   float intensity;
-  unsigned char base_colors[4][3] = {{63, 0, 0}, // Red
+  unsigned char base_colors[8][3] = {{63, 0, 0}, // Red
                                      {0, 63, 0}, // Green
                                      {0, 0, 63}, // Blue
-                                     {63, 63, 0}};
+                                     {63, 63, 0},  {63, 0, 63}, {0, 63, 63},
+                                     {32, 63, 63}, {32, 63, 63}};
 
-  for (color = 0; color < 4; color++) {
-    for (shade = 0; shade < 64; shade++) {
-      index = color * 64 + shade;
-      intensity = shade / 63.0f;
+  for (color = 0; color < 8; color++) {
+    for (shade = 0; shade < 32; shade++) {
+      index = color * 32 + shade;
+      intensity = shade / 31.0f;
 
       outp(0x3C8, index);
 
-      // For the very last shade, just make it white
-      // so we have a color for the background
-      if (color == 3 && shade == 63) {
+      if (color == 7 && shade == 31) {
         outp(0x3C9, 63);
         outp(0x3C9, 63);
         outp(0x3C9, 63);
@@ -67,8 +71,8 @@ unsigned char shade_color(unsigned char color, float intensity) {
   if (intensity < 0.0f)
     intensity = 0.0f;
 
-  shade = (unsigned char)(intensity * 63.0f);
-  return color * 64 + shade;
+  shade = (unsigned char)(intensity * 31.0f);
+  return color * 32 + shade;
 }
 
 void set_mode(unsigned char mode) {
@@ -326,6 +330,13 @@ void draw_shaded_triangle(struct vector2 *p0, struct vector2 *p1,
   }
 }
 
+void render_triangle(struct triangle *triangle, struct vector2 *proj_verts) {
+  draw_wireframe_triangle(&proj_verts[triangle->vertex_index[0]],
+                          &proj_verts[triangle->vertex_index[1]],
+                          &proj_verts[triangle->vertex_index[2]],
+                          shade_color(triangle->color, 31));
+}
+
 struct vector2 viewport_to_canvas(float x, float y) {
   struct vector2 result;
 
@@ -340,52 +351,87 @@ struct vector2 project_vertex(struct vector3 *v) {
                             v->y * PROJ_PLANE_Z / v->z);
 }
 
+void render_object(struct vector3 *vertices, int vert_len,
+                   struct triangle *triangles, int tri_len) {
+  int v, t;
+  struct vector2 proj_verts[8];
+
+  if (vert_len > 8) {
+    return;
+  }
+
+  for (v = 0; v < vert_len; v++) {
+    proj_verts[v] = project_vertex(&vertices[v]);
+  }
+
+  for (t = 0; t < tri_len; t++) {
+    render_triangle(&triangles[t], proj_verts);
+  }
+}
+
 int main(void) {
+  // For the shaded triangle
   struct vector2 p0 = {-50, -62, 0.3f};
   struct vector2 p1 = {50, 12, 0.1f};
   struct vector2 p2 = {5, 62, 1.0f};
 
+  // For simple quad 3d cube
   struct vector3 vAf = {-2, -0.5f, 5};
   struct vector3 vBf = {-2, 0.5f, 5};
   struct vector3 vCf = {-1, 0.5f, 5};
   struct vector3 vDf = {-1, -0.5f, 5};
-
   struct vector3 vAb = {-2, -0.5f, 6};
   struct vector3 vBb = {-2, 0.5f, 6};
   struct vector3 vCb = {-1, 0.5f, 6};
   struct vector3 vDb = {-1, -0.5f, 6};
-
   struct vector2 pAf = project_vertex(&vAf);
   struct vector2 pBf = project_vertex(&vBf);
   struct vector2 pCf = project_vertex(&vCf);
   struct vector2 pDf = project_vertex(&vDf);
-
   struct vector2 pAb = project_vertex(&vAb);
   struct vector2 pBb = project_vertex(&vBb);
   struct vector2 pCb = project_vertex(&vCb);
   struct vector2 pDb = project_vertex(&vDb);
 
+  // For the triangle based cube
+  int i;
+  struct vector3 vertices[8] = {{1, 1, 1},    {-1, 1, 1}, {-1, -1, 1},
+                                {1, -1, 1},   {1, 1, -1}, {-1, 1, -1},
+                                {-1, -1, -1}, {1, -1, -1}};
+  struct triangle triangles[12] = {
+      {0, 1, 2, 0}, {0, 2, 3, 0}, {4, 0, 3, 1}, {4, 3, 7, 1},
+      {5, 4, 7, 2}, {5, 7, 6, 2}, {1, 5, 6, 3}, {1, 6, 2, 3},
+      {4, 5, 1, 4}, {4, 1, 0, 4}, {2, 6, 7, 5}, {2, 7, 3, 5},
+  };
+
   set_mode(0x13);
 
   init_palette();
 
+  // The green shaded triangle
   draw_shaded_triangle(&p0, &p1, &p2, 1);
-  draw_wireframe_triangle(&p0, &p1, &p2, shade_color(3, 63));
+  draw_wireframe_triangle(&p0, &p1, &p2, shade_color(7, 31));
 
-  draw_line(&pAf, &pBf, shade_color(2, 63));
-  draw_line(&pBf, &pCf, shade_color(2, 63));
-  draw_line(&pCf, &pDf, shade_color(2, 63));
-  draw_line(&pDf, &pAf, shade_color(2, 63));
+  // The simple quad cube
+  draw_line(&pAf, &pBf, shade_color(2, 31));
+  draw_line(&pBf, &pCf, shade_color(2, 31));
+  draw_line(&pCf, &pDf, shade_color(2, 31));
+  draw_line(&pDf, &pAf, shade_color(2, 31));
+  draw_line(&pAb, &pBb, shade_color(0, 31));
+  draw_line(&pBb, &pCb, shade_color(0, 31));
+  draw_line(&pCb, &pDb, shade_color(0, 31));
+  draw_line(&pDb, &pAb, shade_color(0, 31));
+  draw_line(&pAf, &pAb, shade_color(1, 31));
+  draw_line(&pBf, &pBb, shade_color(1, 31));
+  draw_line(&pCf, &pCb, shade_color(1, 31));
+  draw_line(&pDf, &pDb, shade_color(1, 31));
 
-  draw_line(&pAb, &pBb, shade_color(0, 63));
-  draw_line(&pBb, &pCb, shade_color(0, 63));
-  draw_line(&pCb, &pDb, shade_color(0, 63));
-  draw_line(&pDb, &pAb, shade_color(0, 63));
-
-  draw_line(&pAf, &pAb, shade_color(1, 63));
-  draw_line(&pBf, &pBb, shade_color(1, 63));
-  draw_line(&pCf, &pCb, shade_color(1, 63));
-  draw_line(&pDf, &pDb, shade_color(1, 63));
+  // Move the triangle cube to the right a bit
+  for (i = 0; i < 8; i++) {
+    vertices[i].x += 1.5f;
+    vertices[i].z += 7;
+  }
+  render_object(vertices, 8, triangles, 12);
 
   getch();
 
