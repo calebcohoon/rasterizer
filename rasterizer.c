@@ -8,6 +8,7 @@
 #define SH 200    // Screen height
 #define VIEWPORT_SIZE 1
 #define PROJ_PLANE_Z 1.0f
+#define PI 3.14159f
 
 #define SWAP_VECTOR2(a, b)                                                     \
   do {                                                                         \
@@ -15,6 +16,12 @@
     (a) = (b);                                                                 \
     (b) = temp;                                                                \
   } while (0)
+
+struct mat3x3 {
+  float a, b, c;
+  float d, e, f;
+  float g, h, i;
+};
 
 struct vector2 {
   int x;
@@ -41,9 +48,15 @@ struct model {
   struct triangle *triangles;
 };
 
+struct transform {
+  float scale;
+  struct vector3 angle;
+  struct vector3 position;
+};
+
 struct instance {
   struct model *model;
-  struct vector3 position;
+  struct transform transform;
 };
 
 // Build an optimized palette for the main colors being used
@@ -156,6 +169,32 @@ float vec3_len(struct vector3 *v) {
 
 float vec3_dot(struct vector3 *a, struct vector3 *b) {
   return (a->x * b->x) + (a->y * b->y) + (a->z * b->z);
+}
+
+struct vector3 vec3_mat3x3_mult(struct vector3 *v, struct mat3x3 *m) {
+  struct vector3 result;
+  result.x = (m->a * v->x) + (m->b * v->y) + (m->c * v->z);
+  result.y = (m->d * v->x) + (m->e * v->y) + (m->f * v->z);
+  result.z = (m->g * v->x) + (m->h * v->y) + (m->i * v->z);
+  return result;
+}
+
+struct mat3x3 mat3_rotate_y(float degrees) {
+  float cos_r = cos(degrees * PI / 180.0f);
+  float sin_r = sin(degrees * PI / 180.0f);
+
+  struct mat3x3 mat;
+  mat.a = cos_r;
+  mat.b = 0;
+  mat.c = -sin_r;
+  mat.d = 0;
+  mat.e = 1;
+  mat.f = 0;
+  mat.g = sin_r;
+  mat.h = 0;
+  mat.i = cos_r;
+
+  return mat;
 }
 
 void interpolate(float i0, float d0, float i1, float d1, float *arry,
@@ -364,9 +403,22 @@ struct vector2 project_vertex(struct vector3 *v) {
                             v->y * PROJ_PLANE_Z / v->z);
 }
 
+struct vector3 apply_transform(struct vector3 *vertex,
+                               struct transform *transform) {
+  struct vector3 result;
+  struct mat3x3 rot_y;
+
+  rot_y = mat3_rotate_y(transform->angle.y);
+  result = vec3_mul(vertex, transform->scale);
+  result = vec3_mat3x3_mult(&result, &rot_y);
+  result = vec3_add(&result, &transform->position);
+
+  return result;
+}
+
 void render_object(struct vector3 *vertices, int vert_len,
                    struct triangle *triangles, int tri_len,
-                   struct vector3 *position) {
+                   struct transform *transform) {
   int v, t;
   struct vector2 proj_verts[8];
 
@@ -375,7 +427,7 @@ void render_object(struct vector3 *vertices, int vert_len,
   }
 
   for (v = 0; v < vert_len; v++) {
-    struct vector3 translated = vec3_add(&vertices[v], position);
+    struct vector3 translated = apply_transform(&vertices[v], transform);
     proj_verts[v] = project_vertex(&translated);
   }
 
@@ -387,7 +439,7 @@ void render_object(struct vector3 *vertices, int vert_len,
 void render_instance(struct instance *instance) {
   render_object(instance->model->vertices, instance->model->vert_count,
                 instance->model->triangles, instance->model->tri_count,
-                &instance->position);
+                &instance->transform);
 }
 
 void render_scene(struct instance *instances, int len) {
@@ -424,7 +476,7 @@ int main(void) {
 
   // For the triangle based cube
   int i;
-  struct vector3 position = {4, -1, 15};
+  struct transform tri_cube_transform = {1, {0, 0, 0}, {4, -1, 15}};
   struct vector3 vertices[8] = {{1, 1, 1},    {-1, 1, 1}, {-1, -1, 1},
                                 {1, -1, 1},   {1, 1, -1}, {-1, 1, -1},
                                 {-1, -1, -1}, {1, -1, -1}};
@@ -461,7 +513,7 @@ int main(void) {
   draw_line(&pDf, &pDb, shade_color(1, 31));
 
   // Render the model
-  render_object(vertices, 8, triangles, 12, &position);
+  render_object(vertices, 8, triangles, 12, &tri_cube_transform);
 
   // Render instance of the cube model
   the_cube.name = "cool cube";
@@ -470,13 +522,21 @@ int main(void) {
   the_cube.vertices = vertices;
   the_cube.triangles = triangles;
   cube_instances[0].model = &the_cube;
-  cube_instances[0].position.x = -1;
-  cube_instances[0].position.y = -2;
-  cube_instances[0].position.z = 8;
+  cube_instances[0].transform.scale = 1;
+  cube_instances[0].transform.angle.x = 0;
+  cube_instances[0].transform.angle.y = 135;
+  cube_instances[0].transform.angle.z = 0;
+  cube_instances[0].transform.position.x = -1;
+  cube_instances[0].transform.position.y = -2;
+  cube_instances[0].transform.position.z = 8;
   cube_instances[1].model = &the_cube;
-  cube_instances[1].position.x = 1;
-  cube_instances[1].position.y = 2;
-  cube_instances[1].position.z = 8;
+  cube_instances[1].transform.scale = 0.8f;
+  cube_instances[1].transform.angle.x = 0;
+  cube_instances[1].transform.angle.y = 45;
+  cube_instances[1].transform.angle.z = 0;
+  cube_instances[1].transform.position.x = 1;
+  cube_instances[1].transform.position.y = 2;
+  cube_instances[1].transform.position.z = 8;
 
   render_scene(cube_instances, 2);
 
