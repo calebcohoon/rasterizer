@@ -33,6 +33,19 @@ struct triangle {
   unsigned char color;
 };
 
+struct model {
+  char *name;
+  int vert_count;
+  int tri_count;
+  struct vector3 *vertices;
+  struct triangle *triangles;
+};
+
+struct instance {
+  struct model *model;
+  struct vector3 position;
+};
+
 // Build an optimized palette for the main colors being used
 void init_palette() {
   int color, shade;
@@ -352,7 +365,8 @@ struct vector2 project_vertex(struct vector3 *v) {
 }
 
 void render_object(struct vector3 *vertices, int vert_len,
-                   struct triangle *triangles, int tri_len) {
+                   struct triangle *triangles, int tri_len,
+                   struct vector3 *position) {
   int v, t;
   struct vector2 proj_verts[8];
 
@@ -361,11 +375,26 @@ void render_object(struct vector3 *vertices, int vert_len,
   }
 
   for (v = 0; v < vert_len; v++) {
-    proj_verts[v] = project_vertex(&vertices[v]);
+    struct vector3 translated = vec3_add(&vertices[v], position);
+    proj_verts[v] = project_vertex(&translated);
   }
 
   for (t = 0; t < tri_len; t++) {
     render_triangle(&triangles[t], proj_verts);
+  }
+}
+
+void render_instance(struct instance *instance) {
+  render_object(instance->model->vertices, instance->model->vert_count,
+                instance->model->triangles, instance->model->tri_count,
+                &instance->position);
+}
+
+void render_scene(struct instance *instances, int len) {
+  int i;
+
+  for (i = 0; i < len; i++) {
+    render_instance(&instances[i]);
   }
 }
 
@@ -395,6 +424,7 @@ int main(void) {
 
   // For the triangle based cube
   int i;
+  struct vector3 position = {4, -1, 15};
   struct vector3 vertices[8] = {{1, 1, 1},    {-1, 1, 1}, {-1, -1, 1},
                                 {1, -1, 1},   {1, 1, -1}, {-1, 1, -1},
                                 {-1, -1, -1}, {1, -1, -1}};
@@ -403,6 +433,10 @@ int main(void) {
       {5, 4, 7, 2}, {5, 7, 6, 2}, {1, 5, 6, 3}, {1, 6, 2, 3},
       {4, 5, 1, 4}, {4, 1, 0, 4}, {2, 6, 7, 5}, {2, 7, 3, 5},
   };
+
+  // For drawing the instances of the cube
+  struct model the_cube;
+  struct instance cube_instances[2];
 
   set_mode(0x13);
 
@@ -426,12 +460,25 @@ int main(void) {
   draw_line(&pCf, &pCb, shade_color(1, 31));
   draw_line(&pDf, &pDb, shade_color(1, 31));
 
-  // Move the triangle cube to the right a bit
-  for (i = 0; i < 8; i++) {
-    vertices[i].x += 1.5f;
-    vertices[i].z += 7;
-  }
-  render_object(vertices, 8, triangles, 12);
+  // Render the model
+  render_object(vertices, 8, triangles, 12, &position);
+
+  // Render instance of the cube model
+  the_cube.name = "cool cube";
+  the_cube.vert_count = 8;
+  the_cube.tri_count = 12;
+  the_cube.vertices = vertices;
+  the_cube.triangles = triangles;
+  cube_instances[0].model = &the_cube;
+  cube_instances[0].position.x = -1;
+  cube_instances[0].position.y = -2;
+  cube_instances[0].position.z = 8;
+  cube_instances[1].model = &the_cube;
+  cube_instances[1].position.x = 1;
+  cube_instances[1].position.y = 2;
+  cube_instances[1].position.z = 8;
+
+  render_scene(cube_instances, 2);
 
   getch();
 
