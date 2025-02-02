@@ -79,6 +79,8 @@ struct camera {
   struct plane clipping_planes[5];
 };
 
+unsigned char back_buffer[SW * SH];
+
 // Build an optimized palette for the main colors being used
 void init_palette() {
   int color, shade;
@@ -130,7 +132,6 @@ void set_mode(unsigned char mode) {
 }
 
 void set_pixel(int x, int y, char color) {
-  unsigned char *screen = (unsigned char *)0xA0000;
   int ax, ay;
 
   ax = SW / 2 + x;
@@ -140,13 +141,15 @@ void set_pixel(int x, int y, char color) {
     return;
   }
 
-  screen[ay * SW + ax] = color;
+  back_buffer[ay * SW + ax] = color;
 }
 
-void clear_screen(unsigned char color) {
+void clear_screen(unsigned char color) { memset(back_buffer, color, SW * SH); }
+
+void present_buffer(void) {
   unsigned char *screen = (unsigned char *)0xA0000;
 
-  memset(screen, color, SW * SH);
+  memcpy(screen, back_buffer, SW * SH);
 }
 
 struct vector3 vec3_add(struct vector3 *a, struct vector3 *b) {
@@ -674,7 +677,6 @@ void render_scene(struct camera *camera, struct instance *instances, int len) {
 }
 
 int main(void) {
-  // For the triangle based cube
   float i = 0;
   float sqrt_2 = 1.0f / sqrt(2);
   struct camera camera;
@@ -755,7 +757,6 @@ int main(void) {
   init_palette();
 
   // Render instance of the cube models
-
   while (i <= 360) {
     // Clear screen to white
     clear_screen(shade_color(7, 31));
@@ -763,6 +764,8 @@ int main(void) {
     camera.orientation = mat4x4_rotate_y(i);
 
     render_scene(&camera, cube_instances, 3);
+
+    present_buffer();
 
     i += 0.5f;
   }
