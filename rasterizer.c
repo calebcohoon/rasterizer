@@ -8,6 +8,7 @@
 #define SW 320    // Screen width
 #define SH 200    // Screen height
 #define VIEWPORT_SIZE 1
+#define CLIPPING_PLANE_COUNT 5
 #define PROJ_PLANE_Z 1.0f
 #define PI 3.14159f
 
@@ -51,6 +52,8 @@ struct triangle {
 
 struct model {
   char *name;
+  float radius;
+  struct vector3 center;
   int vert_count;
   int tri_count;
   struct vector3 *vertices;
@@ -65,9 +68,15 @@ struct instance {
   struct mat4x4 transform;
 };
 
+struct plane {
+  struct vector3 normal;
+  float distance;
+};
+
 struct camera {
   struct vector3 position;
   struct mat4x4 orientation;
+  struct plane clipping_planes[5];
 };
 
 // Build an optimized palette for the main colors being used
@@ -186,6 +195,16 @@ float vec3_len(struct vector3 *v) {
 
 float vec3_dot(struct vector3 *a, struct vector3 *b) {
   return (a->x * b->x) + (a->y * b->y) + (a->z * b->z);
+}
+
+struct vector3 vec3_make(float x, float y, float z) {
+  struct vector3 result;
+
+  result.x = x;
+  result.y = y;
+  result.z = z;
+
+  return result;
 }
 
 struct vector4 vec4_make(float x, float y, float z, float w) {
@@ -385,13 +404,13 @@ void interpolate(float i0, float d0, float i1, float d1, float *arry,
   a = (d1 - d0) / (float)(i1 - i0);
   d = d0;
 
-  for (i = i0; i <= i1; i++) {
+  for (i = i0; i <= i1 && idx < SW; i++) {
     arry[idx] = d;
     d = d + a;
     idx++;
   }
 
-  *o_len = idx - 1;
+  *o_len = idx;
 }
 
 void concat_sides(float *x01, int x01_len, float *x12, int x12_len,
@@ -411,7 +430,7 @@ void draw_line(struct vector2 *p0, struct vector2 *p1, unsigned char color) {
   struct vector2 p0_local = *p0;
   struct vector2 p1_local = *p1;
   int x, y, len;
-  float slope_values[SW];
+  float slope_values[SW + SH];
   float a;
 
   if (abs(p1_local.x - p0_local.x) > abs(p1_local.y - p0_local.y)) {
@@ -573,6 +592,11 @@ struct vector2 viewport_to_canvas(float x, float y) {
 }
 
 struct vector2 project_vertex(struct vector4 *v) {
+  // Prevent a divide by zero
+  if (v->z < 0.1f || v->z == 0) {
+    v->z = 0.1f;
+  }
+
   return viewport_to_canvas(v->x * PROJ_PLANE_Z / v->z,
                             v->y * PROJ_PLANE_Z / v->z);
 }
@@ -583,6 +607,26 @@ void setup_instance_transform(struct instance *i) {
   struct mat4x4 composed = mat4x4_mul_mat4x4(&i->orientation, &scale);
 
   i->transform = mat4x4_mul_mat4x4(&translation, &composed);
+}
+
+int is_clipped(struct plane *planes, struct model *model, float scale,
+               struct mat4x4 *transform) {
+  int p;
+  float radius = model->radius * scale;
+  struct vector4 center =
+      vec4_make(model->center.x, model->center.y, model->center.z, 1);
+  center = mat4x4_mul_vector4(transform, &center);
+
+  for (p = 0; p < CLIPPING_PLANE_COUNT; p++) {
+    struct vector3 center_v3 = vec3_make(center.x, center.y, center.z);
+    float distance =
+        vec3_dot(&planes[p].normal, &center_v3) + planes[p].distance;
+    if (distance < -radius) {
+      return 1;
+    }
+  }
+
+  return 0;
 }
 
 void render_model(struct model *model, struct mat4x4 *matrix) {
@@ -620,13 +664,19 @@ void render_scene(struct camera *camera, struct instance *instances, int len) {
     struct mat4x4 transform =
         mat4x4_mul_mat4x4(&cameraMatrix, &instances[i].transform);
 
-    render_model(instances[i].model, &transform);
+    int status = is_clipped(camera->clipping_planes, instances[i].model,
+                            instances[i].scale, &transform);
+
+    if (status == 0) {
+      render_model(instances[i].model, &transform);
+    }
   }
 }
 
 int main(void) {
   // For the triangle based cube
-  int i;
+  float i = 0;
+  float sqrt_2 = 1.0f / sqrt(2);
   struct camera camera;
   struct vector3 vertices[8] = {{1, 1, 1},    {-1, 1, 1}, {-1, -1, 1},
                                 {1, -1, 1},   {1, 1, -1}, {-1, 1, -1},
@@ -639,7 +689,7 @@ int main(void) {
 
   // For drawing the instances of the cube
   struct model the_cube;
-  struct instance cube_instances[2];
+  struct instance cube_instances[3];
 
   // Setup the cube instances
   the_cube.name = "cool cube";
@@ -647,6 +697,8 @@ int main(void) {
   the_cube.tri_count = 12;
   the_cube.vertices = vertices;
   the_cube.triangles = triangles;
+  the_cube.radius = sqrt(3);
+  the_cube.center = vec3_make(0, 0, 0);
 
   cube_instances[0].model = &the_cube;
   cube_instances[0].scale = 0.75f;
@@ -664,23 +716,56 @@ int main(void) {
   cube_instances[1].orientation = mat4x4_rotate_y(195);
   setup_instance_transform(&cube_instances[1]);
 
+  cube_instances[2].model = &the_cube;
+  cube_instances[2].scale = 1;
+  cube_instances[2].position.x = 0;
+  cube_instances[2].position.y = 0;
+  cube_instances[2].position.z = -10;
+  cube_instances[2].orientation = mat4x4_rotate_y(195);
+  setup_instance_transform(&cube_instances[2]);
+
   // Position the camera
   camera.position.x = -3;
   camera.position.y = 1;
   camera.position.z = 2;
-  camera.orientation = mat4x4_rotate_y(-30);
+  camera.orientation = mat4x4_identity();
+
+  // Near plane
+  camera.clipping_planes[0].normal = vec3_make(0, 0, 1);
+  camera.clipping_planes[0].distance = -1;
+
+  // Left plane
+  camera.clipping_planes[1].normal = vec3_make(sqrt_2, 0, sqrt_2);
+  camera.clipping_planes[1].distance = 0;
+
+  // Right plane
+  camera.clipping_planes[2].normal = vec3_make(-sqrt_2, 0, sqrt_2);
+  camera.clipping_planes[2].distance = 0;
+
+  // Top plane
+  camera.clipping_planes[3].normal = vec3_make(0, -sqrt_2, sqrt_2);
+  camera.clipping_planes[3].distance = 0;
+
+  // Bottom plane
+  camera.clipping_planes[4].normal = vec3_make(0, sqrt_2, sqrt_2);
+  camera.clipping_planes[4].distance = 0;
 
   set_mode(0x13);
-
-  // Clear screen to white
-  clear_screen(shade_color(7, 31));
 
   init_palette();
 
   // Render instance of the cube models
-  render_scene(&camera, cube_instances, 2);
 
-  getch();
+  while (i <= 360) {
+    // Clear screen to white
+    clear_screen(shade_color(7, 31));
+
+    camera.orientation = mat4x4_rotate_y(i);
+
+    render_scene(&camera, cube_instances, 3);
+
+    i += 0.5f;
+  }
 
   set_mode(0x03);
 
