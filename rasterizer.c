@@ -2,6 +2,7 @@
 #include <dos.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define INF 32767 // Infinity for 16 bit compilers
 #define SW 320    // Screen width
@@ -17,10 +18,11 @@
     (b) = temp;                                                                \
   } while (0)
 
-struct mat3x3 {
-  float a, b, c;
-  float d, e, f;
-  float g, h, i;
+struct mat4x4 {
+  float a, b, c, d;
+  float e, f, g, h;
+  float i, j, k, l;
+  float m, n, o, p;
 };
 
 struct vector2 {
@@ -33,6 +35,13 @@ struct vector3 {
   float x;
   float y;
   float z;
+};
+
+struct vector4 {
+  float x;
+  float y;
+  float z;
+  float w;
 };
 
 struct triangle {
@@ -48,15 +57,17 @@ struct model {
   struct triangle *triangles;
 };
 
-struct transform {
-  float scale;
-  struct vector3 angle;
-  struct vector3 position;
-};
-
 struct instance {
   struct model *model;
-  struct transform transform;
+  float scale;
+  struct vector3 position;
+  struct mat4x4 orientation;
+  struct mat4x4 transform;
+};
+
+struct camera {
+  struct vector3 position;
+  struct mat4x4 orientation;
 };
 
 // Build an optimized palette for the main colors being used
@@ -123,6 +134,12 @@ void set_pixel(int x, int y, char color) {
   screen[ay * SW + ax] = color;
 }
 
+void clear_screen(unsigned char color) {
+  unsigned char *screen = (unsigned char *)0xA0000;
+
+  memset(screen, color, SW * SH);
+}
+
 struct vector3 vec3_add(struct vector3 *a, struct vector3 *b) {
   struct vector3 result;
 
@@ -171,30 +188,187 @@ float vec3_dot(struct vector3 *a, struct vector3 *b) {
   return (a->x * b->x) + (a->y * b->y) + (a->z * b->z);
 }
 
-struct vector3 vec3_mat3x3_mult(struct vector3 *v, struct mat3x3 *m) {
-  struct vector3 result;
-  result.x = (m->a * v->x) + (m->b * v->y) + (m->c * v->z);
-  result.y = (m->d * v->x) + (m->e * v->y) + (m->f * v->z);
-  result.z = (m->g * v->x) + (m->h * v->y) + (m->i * v->z);
+struct vector4 vec4_make(float x, float y, float z, float w) {
+  struct vector4 result;
+
+  result.x = x;
+  result.y = y;
+  result.z = z;
+  result.w = w;
+
   return result;
 }
 
-struct mat3x3 mat3_rotate_y(float degrees) {
+struct vector4 mat4x4_mul_vector4(const struct mat4x4 *matrix,
+                                  const struct vector4 *vector) {
+  struct vector4 result;
+
+  result.x = matrix->a * vector->x + matrix->b * vector->y +
+             matrix->c * vector->z + matrix->d * vector->w;
+
+  result.y = matrix->e * vector->x + matrix->f * vector->y +
+             matrix->g * vector->z + matrix->h * vector->w;
+
+  result.z = matrix->i * vector->x + matrix->j * vector->y +
+             matrix->k * vector->z + matrix->l * vector->w;
+
+  result.w = matrix->m * vector->x + matrix->n * vector->y +
+             matrix->o * vector->z + matrix->p * vector->w;
+
+  return result;
+}
+
+struct mat4x4 mat4x4_identity(void) {
+  struct mat4x4 result;
+
+  result.a = 1.0f;
+  result.f = 1.0f;
+  result.k = 1.0f;
+  result.p = 1.0f;
+
+  result.b = 0.0f;
+  result.c = 0.0f;
+  result.d = 0.0f;
+  result.e = 0.0f;
+  result.g = 0.0f;
+  result.h = 0.0f;
+  result.i = 0.0f;
+  result.j = 0.0f;
+  result.l = 0.0f;
+  result.m = 0.0f;
+  result.n = 0.0f;
+  result.o = 0.0f;
+
+  return result;
+}
+
+struct mat4x4 mat4x4_transpose(struct mat4x4 *m) {
+  struct mat4x4 result;
+
+  result.a = m->a;
+  result.b = m->e;
+  result.c = m->i;
+  result.d = m->m;
+  result.e = m->b;
+  result.f = m->f;
+  result.g = m->j;
+  result.h = m->n;
+  result.i = m->c;
+  result.j = m->g;
+  result.k = m->k;
+  result.l = m->o;
+  result.m = m->d;
+  result.n = m->h;
+  result.o = m->l;
+  result.p = m->p;
+
+  return result;
+}
+
+struct mat4x4 mat4x4_mul_mat4x4(struct mat4x4 *m1, struct mat4x4 *m2) {
+  struct mat4x4 result;
+
+  result.a = m1->a * m2->a + m1->b * m2->e + m1->c * m2->i + m1->d * m2->m;
+  result.b = m1->a * m2->b + m1->b * m2->f + m1->c * m2->j + m1->d * m2->n;
+  result.c = m1->a * m2->c + m1->b * m2->g + m1->c * m2->k + m1->d * m2->o;
+  result.d = m1->a * m2->d + m1->b * m2->h + m1->c * m2->l + m1->d * m2->p;
+
+  result.e = m1->e * m2->a + m1->f * m2->e + m1->g * m2->i + m1->h * m2->m;
+  result.f = m1->e * m2->b + m1->f * m2->f + m1->g * m2->j + m1->h * m2->n;
+  result.g = m1->e * m2->c + m1->f * m2->g + m1->g * m2->k + m1->h * m2->o;
+  result.h = m1->e * m2->d + m1->f * m2->h + m1->g * m2->l + m1->h * m2->p;
+
+  result.i = m1->i * m2->a + m1->j * m2->e + m1->k * m2->i + m1->l * m2->m;
+  result.j = m1->i * m2->b + m1->j * m2->f + m1->k * m2->j + m1->l * m2->n;
+  result.k = m1->i * m2->c + m1->j * m2->g + m1->k * m2->k + m1->l * m2->o;
+  result.l = m1->i * m2->d + m1->j * m2->h + m1->k * m2->l + m1->l * m2->p;
+
+  result.m = m1->m * m2->a + m1->n * m2->e + m1->o * m2->i + m1->p * m2->m;
+  result.n = m1->m * m2->b + m1->n * m2->f + m1->o * m2->j + m1->p * m2->n;
+  result.o = m1->m * m2->c + m1->n * m2->g + m1->o * m2->k + m1->p * m2->o;
+  result.p = m1->m * m2->d + m1->n * m2->h + m1->o * m2->l + m1->p * m2->p;
+
+  return result;
+}
+
+struct mat4x4 mat4x4_rotate_y(float degrees) {
   float cos_r = cos(degrees * PI / 180.0f);
   float sin_r = sin(degrees * PI / 180.0f);
+  struct mat4x4 result;
 
-  struct mat3x3 mat;
-  mat.a = cos_r;
-  mat.b = 0;
-  mat.c = -sin_r;
-  mat.d = 0;
-  mat.e = 1;
-  mat.f = 0;
-  mat.g = sin_r;
-  mat.h = 0;
-  mat.i = cos_r;
+  result.a = cos_r;
+  result.b = 0;
+  result.c = -sin_r;
+  result.d = 0;
 
-  return mat;
+  result.e = 0;
+  result.f = 1;
+  result.g = 0;
+  result.h = 0;
+
+  result.i = sin_r;
+  result.j = 0;
+  result.k = cos_r;
+  result.l = 0;
+
+  result.m = 0;
+  result.n = 0;
+  result.o = 0;
+  result.p = 1;
+
+  return result;
+}
+
+struct mat4x4 mat4x4_translate_vector3(struct vector3 *v) {
+  struct mat4x4 result;
+
+  result.a = 1;
+  result.b = 0;
+  result.c = 0;
+  result.d = v->x;
+
+  result.e = 0;
+  result.f = 1;
+  result.g = 0;
+  result.h = v->y;
+
+  result.i = 0;
+  result.j = 0;
+  result.k = 1;
+  result.l = v->z;
+
+  result.m = 0;
+  result.n = 0;
+  result.o = 0;
+  result.p = 1;
+
+  return result;
+}
+
+struct mat4x4 mat4x4_scale(float scale) {
+  struct mat4x4 result;
+
+  result.a = scale;
+  result.b = 0;
+  result.c = 0;
+  result.d = 0;
+
+  result.e = 0;
+  result.f = scale;
+  result.g = 0;
+  result.h = 0;
+
+  result.i = 0;
+  result.j = 0;
+  result.k = scale;
+  result.l = 0;
+
+  result.m = 0;
+  result.n = 0;
+  result.o = 0;
+  result.p = 1;
+
+  return result;
 }
 
 void interpolate(float i0, float d0, float i1, float d1, float *arry,
@@ -398,85 +572,62 @@ struct vector2 viewport_to_canvas(float x, float y) {
   return result;
 }
 
-struct vector2 project_vertex(struct vector3 *v) {
+struct vector2 project_vertex(struct vector4 *v) {
   return viewport_to_canvas(v->x * PROJ_PLANE_Z / v->z,
                             v->y * PROJ_PLANE_Z / v->z);
 }
 
-struct vector3 apply_transform(struct vector3 *vertex,
-                               struct transform *transform) {
-  struct vector3 result;
-  struct mat3x3 rot_y;
+void setup_instance_transform(struct instance *i) {
+  struct mat4x4 scale = mat4x4_scale(i->scale);
+  struct mat4x4 translation = mat4x4_translate_vector3(&i->position);
+  struct mat4x4 composed = mat4x4_mul_mat4x4(&i->orientation, &scale);
 
-  rot_y = mat3_rotate_y(transform->angle.y);
-  result = vec3_mul(vertex, transform->scale);
-  result = vec3_mat3x3_mult(&result, &rot_y);
-  result = vec3_add(&result, &transform->position);
-
-  return result;
+  i->transform = mat4x4_mul_mat4x4(&translation, &composed);
 }
 
-void render_object(struct vector3 *vertices, int vert_len,
-                   struct triangle *triangles, int tri_len,
-                   struct transform *transform) {
+void render_model(struct model *model, struct mat4x4 *matrix) {
   int v, t;
   struct vector2 proj_verts[8];
 
-  if (vert_len > 8) {
+  if (model->vert_count > 8) {
     return;
   }
 
-  for (v = 0; v < vert_len; v++) {
-    struct vector3 translated = apply_transform(&vertices[v], transform);
-    proj_verts[v] = project_vertex(&translated);
+  for (v = 0; v < model->vert_count; v++) {
+    struct vector3 vertex = model->vertices[v];
+    struct vector4 vertex_h = vec4_make(vertex.x, vertex.y, vertex.z, 1);
+    struct vector4 vertex_mult = mat4x4_mul_vector4(matrix, &vertex_h);
+
+    proj_verts[v] = project_vertex(&vertex_mult);
   }
 
-  for (t = 0; t < tri_len; t++) {
-    render_triangle(&triangles[t], proj_verts);
+  for (t = 0; t < model->tri_count; t++) {
+    render_triangle(&model->triangles[t], proj_verts);
   }
 }
 
-void render_instance(struct instance *instance) {
-  render_object(instance->model->vertices, instance->model->vert_count,
-                instance->model->triangles, instance->model->tri_count,
-                &instance->transform);
-}
-
-void render_scene(struct instance *instances, int len) {
+void render_scene(struct camera *camera, struct instance *instances, int len) {
   int i;
+  struct mat4x4 cameraMatrix, m1, m2;
+  struct vector3 neg_camera_pos;
+
+  neg_camera_pos = vec3_mul(&camera->position, -1);
+  m1 = mat4x4_transpose(&camera->orientation);
+  m2 = mat4x4_translate_vector3(&neg_camera_pos);
+  cameraMatrix = mat4x4_mul_mat4x4(&m1, &m2);
 
   for (i = 0; i < len; i++) {
-    render_instance(&instances[i]);
+    struct mat4x4 transform =
+        mat4x4_mul_mat4x4(&cameraMatrix, &instances[i].transform);
+
+    render_model(instances[i].model, &transform);
   }
 }
 
 int main(void) {
-  // For the shaded triangle
-  struct vector2 p0 = {-50, -62, 0.3f};
-  struct vector2 p1 = {50, 12, 0.1f};
-  struct vector2 p2 = {5, 62, 1.0f};
-
-  // For simple quad 3d cube
-  struct vector3 vAf = {-2, -0.5f, 5};
-  struct vector3 vBf = {-2, 0.5f, 5};
-  struct vector3 vCf = {-1, 0.5f, 5};
-  struct vector3 vDf = {-1, -0.5f, 5};
-  struct vector3 vAb = {-2, -0.5f, 6};
-  struct vector3 vBb = {-2, 0.5f, 6};
-  struct vector3 vCb = {-1, 0.5f, 6};
-  struct vector3 vDb = {-1, -0.5f, 6};
-  struct vector2 pAf = project_vertex(&vAf);
-  struct vector2 pBf = project_vertex(&vBf);
-  struct vector2 pCf = project_vertex(&vCf);
-  struct vector2 pDf = project_vertex(&vDf);
-  struct vector2 pAb = project_vertex(&vAb);
-  struct vector2 pBb = project_vertex(&vBb);
-  struct vector2 pCb = project_vertex(&vCb);
-  struct vector2 pDb = project_vertex(&vDb);
-
   // For the triangle based cube
   int i;
-  struct transform tri_cube_transform = {1, {0, 0, 0}, {4, -1, 15}};
+  struct camera camera;
   struct vector3 vertices[8] = {{1, 1, 1},    {-1, 1, 1}, {-1, -1, 1},
                                 {1, -1, 1},   {1, 1, -1}, {-1, 1, -1},
                                 {-1, -1, -1}, {1, -1, -1}};
@@ -490,55 +641,44 @@ int main(void) {
   struct model the_cube;
   struct instance cube_instances[2];
 
-  set_mode(0x13);
-
-  init_palette();
-
-  // The green shaded triangle
-  draw_shaded_triangle(&p0, &p1, &p2, 1);
-  draw_wireframe_triangle(&p0, &p1, &p2, shade_color(7, 31));
-
-  // The simple quad cube
-  draw_line(&pAf, &pBf, shade_color(2, 31));
-  draw_line(&pBf, &pCf, shade_color(2, 31));
-  draw_line(&pCf, &pDf, shade_color(2, 31));
-  draw_line(&pDf, &pAf, shade_color(2, 31));
-  draw_line(&pAb, &pBb, shade_color(0, 31));
-  draw_line(&pBb, &pCb, shade_color(0, 31));
-  draw_line(&pCb, &pDb, shade_color(0, 31));
-  draw_line(&pDb, &pAb, shade_color(0, 31));
-  draw_line(&pAf, &pAb, shade_color(1, 31));
-  draw_line(&pBf, &pBb, shade_color(1, 31));
-  draw_line(&pCf, &pCb, shade_color(1, 31));
-  draw_line(&pDf, &pDb, shade_color(1, 31));
-
-  // Render the model
-  render_object(vertices, 8, triangles, 12, &tri_cube_transform);
-
-  // Render instance of the cube model
+  // Setup the cube instances
   the_cube.name = "cool cube";
   the_cube.vert_count = 8;
   the_cube.tri_count = 12;
   the_cube.vertices = vertices;
   the_cube.triangles = triangles;
-  cube_instances[0].model = &the_cube;
-  cube_instances[0].transform.scale = 1;
-  cube_instances[0].transform.angle.x = 0;
-  cube_instances[0].transform.angle.y = 135;
-  cube_instances[0].transform.angle.z = 0;
-  cube_instances[0].transform.position.x = -1;
-  cube_instances[0].transform.position.y = -2;
-  cube_instances[0].transform.position.z = 8;
-  cube_instances[1].model = &the_cube;
-  cube_instances[1].transform.scale = 0.8f;
-  cube_instances[1].transform.angle.x = 0;
-  cube_instances[1].transform.angle.y = 45;
-  cube_instances[1].transform.angle.z = 0;
-  cube_instances[1].transform.position.x = 1;
-  cube_instances[1].transform.position.y = 2;
-  cube_instances[1].transform.position.z = 8;
 
-  render_scene(cube_instances, 2);
+  cube_instances[0].model = &the_cube;
+  cube_instances[0].scale = 0.75f;
+  cube_instances[0].position.x = -1.5f;
+  cube_instances[0].position.y = 0;
+  cube_instances[0].position.z = 7;
+  cube_instances[0].orientation = mat4x4_identity();
+  setup_instance_transform(&cube_instances[0]);
+
+  cube_instances[1].model = &the_cube;
+  cube_instances[1].scale = 1;
+  cube_instances[1].position.x = 1.25f;
+  cube_instances[1].position.y = 2.5f;
+  cube_instances[1].position.z = 7.5f;
+  cube_instances[1].orientation = mat4x4_rotate_y(195);
+  setup_instance_transform(&cube_instances[1]);
+
+  // Position the camera
+  camera.position.x = -3;
+  camera.position.y = 1;
+  camera.position.z = 2;
+  camera.orientation = mat4x4_rotate_y(-30);
+
+  set_mode(0x13);
+
+  // Clear screen to white
+  clear_screen(shade_color(7, 31));
+
+  init_palette();
+
+  // Render instance of the cube models
+  render_scene(&camera, cube_instances, 2);
 
   getch();
 
