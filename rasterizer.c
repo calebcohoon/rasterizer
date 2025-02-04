@@ -80,6 +80,7 @@ struct camera {
 };
 
 unsigned char back_buffer[SW * SH];
+float depth_buffer[SW * SH];
 
 // Build an optimized palette for the main colors being used
 void init_palette() {
@@ -142,6 +143,24 @@ void set_pixel(int x, int y, char color) {
   }
 
   back_buffer[ay * SW + ax] = color;
+}
+
+int is_closer_pixel(int x, int y, float inv_z) {
+  int ax, ay, offset;
+
+  ax = SW / 2 + x;
+  ay = SH / 2 - y;
+
+  if (ax < 0 || ax >= SW || ay < 0 || ay >= SH) {
+    return 0;
+  }
+
+  if (depth_buffer[ay * SW + ax] < inv_z) {
+    depth_buffer[ay * SW + ax] = inv_z;
+    return 1;
+  }
+
+  return 0;
 }
 
 void clear_screen(unsigned char color) { memset(back_buffer, color, SW * SH); }
@@ -579,10 +598,10 @@ void draw_shaded_triangle(struct vector2 *p0, struct vector2 *p1,
 }
 
 void render_triangle(struct triangle *triangle, struct vector2 *proj_verts) {
-  draw_wireframe_triangle(&proj_verts[triangle->vertex_index[0]],
-                          &proj_verts[triangle->vertex_index[1]],
-                          &proj_verts[triangle->vertex_index[2]],
-                          shade_color(triangle->color, 31));
+  draw_filled_triangle(&proj_verts[triangle->vertex_index[0]],
+                       &proj_verts[triangle->vertex_index[1]],
+                       &proj_verts[triangle->vertex_index[2]],
+                       shade_color(triangle->color, 31));
 }
 
 struct vector2 viewport_to_canvas(float x, float y) {
@@ -677,7 +696,6 @@ void render_scene(struct camera *camera, struct instance *instances, int len) {
 }
 
 int main(void) {
-  float i = 0;
   float sqrt_2 = 1.0f / sqrt(2);
   struct camera camera;
   struct vector3 vertices[8] = {{1, 1, 1},    {-1, 1, 1}, {-1, -1, 1},
@@ -691,7 +709,7 @@ int main(void) {
 
   // For drawing the instances of the cube
   struct model the_cube;
-  struct instance cube_instances[3];
+  struct instance cube_instances[2];
 
   // Setup the cube instances
   the_cube.name = "cool cube";
@@ -718,19 +736,11 @@ int main(void) {
   cube_instances[1].orientation = mat4x4_rotate_y(195);
   setup_instance_transform(&cube_instances[1]);
 
-  cube_instances[2].model = &the_cube;
-  cube_instances[2].scale = 1;
-  cube_instances[2].position.x = 0;
-  cube_instances[2].position.y = 0;
-  cube_instances[2].position.z = -10;
-  cube_instances[2].orientation = mat4x4_rotate_y(195);
-  setup_instance_transform(&cube_instances[2]);
-
   // Position the camera
   camera.position.x = -3;
   camera.position.y = 1;
   camera.position.z = 2;
-  camera.orientation = mat4x4_identity();
+  camera.orientation = mat4x4_rotate_y(-30);
 
   // Near plane
   camera.clipping_planes[0].normal = vec3_make(0, 0, 1);
@@ -756,19 +766,13 @@ int main(void) {
 
   init_palette();
 
-  // Render instance of the cube models
-  while (i <= 360) {
-    // Clear screen to white
-    clear_screen(shade_color(7, 31));
+  clear_screen(shade_color(7, 31));
 
-    camera.orientation = mat4x4_rotate_y(i);
+  render_scene(&camera, cube_instances, 2);
 
-    render_scene(&camera, cube_instances, 3);
+  present_buffer();
 
-    present_buffer();
-
-    i += 0.5f;
-  }
+  getch();
 
   set_mode(0x03);
 
