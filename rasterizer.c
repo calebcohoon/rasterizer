@@ -115,11 +115,7 @@ void init_palette() {
 }
 
 void init_depth_buffer(void) {
-  int i;
-
-  for (i = 0; i < SW * SH; i++) {
-    depth_buffer[i] = 0;
-  }
+  memset(depth_buffer, 0, sizeof(float) * SW * SH);
 }
 
 unsigned char shade_color(unsigned char color, float intensity) {
