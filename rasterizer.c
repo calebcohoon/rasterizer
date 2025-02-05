@@ -11,6 +11,7 @@
 #define CLIPPING_PLANE_COUNT 5
 #define PROJ_PLANE_Z 1.0f
 #define PI 3.14159f
+#define DEPTH_EPSILON 0.00001f
 
 #define SWAP_VECTOR2(a, b)                                                     \
   do {                                                                         \
@@ -113,6 +114,14 @@ void init_palette() {
   }
 }
 
+void init_depth_buffer(void) {
+  int i;
+
+  for (i = 0; i < SW * SH; i++) {
+    depth_buffer[i] = 0;
+  }
+}
+
 unsigned char shade_color(unsigned char color, float intensity) {
   unsigned char shade;
   if (intensity > 1.0f)
@@ -155,7 +164,7 @@ int is_closer_pixel(int x, int y, float inv_z) {
     return 0;
   }
 
-  if (depth_buffer[ay * SW + ax] < inv_z) {
+  if (depth_buffer[ay * SW + ax] < (inv_z - DEPTH_EPSILON)) {
     depth_buffer[ay * SW + ax] = inv_z;
     return 1;
   }
@@ -217,6 +226,16 @@ float vec3_len(struct vector3 *v) {
 
 float vec3_dot(struct vector3 *a, struct vector3 *b) {
   return (a->x * b->x) + (a->y * b->y) + (a->z * b->z);
+}
+
+struct vector3 vec3_cross(struct vector3 *a, struct vector3 *b) {
+  struct vector3 result;
+
+  result.x = (a->y * b->z) - (a->z * b->y);
+  result.y = (a->z * b->x) - (a->x * b->z);
+  result.z = (a->x * b->y) - (a->y * b->x);
+
+  return result;
 }
 
 struct vector3 vec3_make(float x, float y, float z) {
@@ -448,6 +467,14 @@ void concat_sides(float *x01, int x01_len, float *x12, int x12_len,
   }
 }
 
+struct vector3 compute_triangle_normal(struct vector3 *v0, struct vector3 *v1,
+                                       struct vector3 *v2) {
+  struct vector3 v0v1 = vec3_sub(v0, v1);
+  struct vector3 v0v2 = vec3_sub(v0, v2);
+
+  return vec3_cross(&v0v1, &v0v2);
+}
+
 void draw_line(struct vector2 *p0, struct vector2 *p1, unsigned char color) {
   struct vector2 p0_local = *p0;
   struct vector2 p1_local = *p1;
@@ -488,51 +515,6 @@ void draw_wireframe_triangle(struct vector2 *p0, struct vector2 *p1,
 }
 
 void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
-                          struct vector2 *p2, unsigned char color) {
-  struct vector2 p0_local = *p0;
-  struct vector2 p1_local = *p1;
-  struct vector2 p2_local = *p2;
-  int m, x, y;
-  float *x_left, *x_right;
-  float x01[SH], x12[SH], x02[SH], x012[SH];
-  int x01_len, x12_len, x02_len;
-
-  if (p1_local.y < p0_local.y) {
-    SWAP_VECTOR2(p1_local, p0_local);
-  }
-
-  if (p2_local.y < p0_local.y) {
-    SWAP_VECTOR2(p2_local, p0_local);
-  }
-
-  if (p2_local.y < p1_local.y) {
-    SWAP_VECTOR2(p2_local, p1_local);
-  }
-
-  interpolate(p0_local.y, p0_local.x, p1_local.y, p1_local.x, &x01, &x01_len);
-  interpolate(p1_local.y, p1_local.x, p2_local.y, p2_local.x, &x12, &x12_len);
-  interpolate(p0_local.y, p0_local.x, p2_local.y, p2_local.x, &x02, &x02_len);
-
-  concat_sides(&x01, x01_len, &x12, x12_len, &x012);
-
-  m = x02_len / 2;
-
-  if (x02[m] < x012[m]) {
-    x_left = x02;
-    x_right = x012;
-  } else {
-    x_left = x012;
-    x_right = x02;
-  }
-
-  for (y = p0_local.y; y <= p2_local.y; y++) {
-    for (x = x_left[y - p0_local.y]; x <= x_right[y - p0_local.y]; x++) {
-      set_pixel(x, y, color);
-    }
-  }
-}
-
-void draw_shaded_triangle(struct vector2 *p0, struct vector2 *p1,
                           struct vector2 *p2, unsigned char color) {
   struct vector2 p0_local = *p0;
   struct vector2 p1_local = *p1;
@@ -592,12 +574,27 @@ void draw_shaded_triangle(struct vector2 *p0, struct vector2 *p1,
                 &h_segment, &h_segment_len);
 
     for (x = xl; x <= xr; x++) {
-      set_pixel(x, y, shade_color(color, h_segment[x - xl]));
+      if (is_closer_pixel(x, y, h_segment[x - xl])) {
+        set_pixel(x, y, color);
+      }
     }
   }
 }
 
-void render_triangle(struct triangle *triangle, struct vector2 *proj_verts) {
+void render_triangle(struct triangle *triangle,
+                     struct vector3 *transformed_verts,
+                     struct vector2 *proj_verts) {
+  struct vector3 v0 = transformed_verts[triangle->vertex_index[0]];
+  struct vector3 v1 = transformed_verts[triangle->vertex_index[1]];
+  struct vector3 v2 = transformed_verts[triangle->vertex_index[2]];
+  struct vector3 normal = compute_triangle_normal(&v0, &v1, &v2);
+  struct vector3 vert_to_camera = vec3_mul(&v0, -1);
+  float vert_to_camera_dot = vec3_dot(&normal, &vert_to_camera);
+
+  if (vert_to_camera_dot <= 0) {
+    return;
+  }
+
   draw_filled_triangle(&proj_verts[triangle->vertex_index[0]],
                        &proj_verts[triangle->vertex_index[1]],
                        &proj_verts[triangle->vertex_index[2]],
@@ -653,7 +650,8 @@ int is_clipped(struct plane *planes, struct model *model, float scale,
 
 void render_model(struct model *model, struct mat4x4 *matrix) {
   int v, t;
-  struct vector2 proj_verts[8];
+  struct vector3 transformed_verts[8];
+  struct vector2 projected_verts[8];
 
   if (model->vert_count > 8) {
     return;
@@ -664,11 +662,16 @@ void render_model(struct model *model, struct mat4x4 *matrix) {
     struct vector4 vertex_h = vec4_make(vertex.x, vertex.y, vertex.z, 1);
     struct vector4 vertex_mult = mat4x4_mul_vector4(matrix, &vertex_h);
 
-    proj_verts[v] = project_vertex(&vertex_mult);
+    transformed_verts[v] =
+        vec3_make(vertex_mult.x, vertex_mult.y, vertex_mult.z);
+    projected_verts[v] = project_vertex(&vertex_mult);
+
+    // Repurpose H with the transformed Z later used with z-buffer
+    projected_verts[v].h = 1.0f / vertex_mult.z;
   }
 
   for (t = 0; t < model->tri_count; t++) {
-    render_triangle(&model->triangles[t], proj_verts);
+    render_triangle(&model->triangles[t], transformed_verts, projected_verts);
   }
 }
 
@@ -709,7 +712,7 @@ int main(void) {
 
   // For drawing the instances of the cube
   struct model the_cube;
-  struct instance cube_instances[2];
+  struct instance cube_instances[3];
 
   // Setup the cube instances
   the_cube.name = "cool cube";
@@ -735,6 +738,14 @@ int main(void) {
   cube_instances[1].position.z = 7.5f;
   cube_instances[1].orientation = mat4x4_rotate_y(195);
   setup_instance_transform(&cube_instances[1]);
+
+  cube_instances[2].model = &the_cube;
+  cube_instances[2].scale = 10;
+  cube_instances[2].position.x = 50;
+  cube_instances[2].position.y = 0;
+  cube_instances[2].position.z = 90;
+  cube_instances[2].orientation = mat4x4_rotate_y(135);
+  setup_instance_transform(&cube_instances[2]);
 
   // Position the camera
   camera.position.x = -3;
@@ -766,9 +777,11 @@ int main(void) {
 
   init_palette();
 
+  init_depth_buffer();
+
   clear_screen(shade_color(7, 31));
 
-  render_scene(&camera, cube_instances, 2);
+  render_scene(&camera, cube_instances, 3);
 
   present_buffer();
 
