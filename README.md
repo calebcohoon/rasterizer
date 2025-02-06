@@ -1,4 +1,6 @@
-# rasterizer.c
+# RASTERIZER.C
+
+I've been following the book Computer Graphics from Scratch (https://gabrielgambetta.com/computer-graphics-from-scratch/index.html) and as I make progress through the chapters I take a screenshot and commit the current, compiling code. I didn't lay this all out too well and should have included the source for every screenshot and not just the source for the latest screenshot. Sorry if you get confused when compiling the latest code to only see the most recent version. I also remove code sometimes that does not pertain to the latest visuals. All of the progress is in the commit history though. I'll lay things out better in future code examples!
 
 ![Screenshot 2025-01-25 165852](https://github.com/user-attachments/assets/f12f7910-45c2-4d93-8dfa-90654859abd6)
 
