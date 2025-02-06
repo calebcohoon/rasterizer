@@ -82,6 +82,7 @@ struct camera {
 
 unsigned char back_buffer[SW * SH];
 float depth_buffer[SW * SH];
+int render_example_state = 0;
 
 // Build an optimized palette for the main colors being used
 void init_palette() {
@@ -570,7 +571,8 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
                 &h_segment, &h_segment_len);
 
     for (x = xl; x <= xr; x++) {
-      if (is_closer_pixel(x, y, h_segment[x - xl])) {
+      if (is_closer_pixel(x, y, h_segment[x - xl]) ||
+          render_example_state < 2) {
         set_pixel(x, y, color);
       }
     }
@@ -587,7 +589,8 @@ void render_triangle(struct triangle *triangle,
   struct vector3 vert_to_camera = vec3_mul(&v0, -1);
   float vert_to_camera_dot = vec3_dot(&normal, &vert_to_camera);
 
-  if (vert_to_camera_dot <= 0) {
+  // Cull back face geometry
+  if (vert_to_camera_dot <= 0 && render_example_state > 0) {
     return;
   }
 
@@ -649,10 +652,6 @@ void render_model(struct model *model, struct mat4x4 *matrix) {
   struct vector3 transformed_verts[8];
   struct vector2 projected_verts[8];
 
-  if (model->vert_count > 8) {
-    return;
-  }
-
   for (v = 0; v < model->vert_count; v++) {
     struct vector3 vertex = model->vertices[v];
     struct vector4 vertex_h = vec4_make(vertex.x, vertex.y, vertex.z, 1);
@@ -708,7 +707,7 @@ int main(void) {
 
   // For drawing the instances of the cube
   struct model the_cube;
-  struct instance cube_instances[3];
+  struct instance cube_instances[4];
 
   // Setup the cube instances
   the_cube.name = "cool cube";
@@ -736,12 +735,20 @@ int main(void) {
   setup_instance_transform(&cube_instances[1]);
 
   cube_instances[2].model = &the_cube;
-  cube_instances[2].scale = 10;
+  cube_instances[2].scale = 15;
   cube_instances[2].position.x = 50;
   cube_instances[2].position.y = 0;
   cube_instances[2].position.z = 90;
-  cube_instances[2].orientation = mat4x4_rotate_y(135);
+  cube_instances[2].orientation = mat4x4_rotate_y(130);
   setup_instance_transform(&cube_instances[2]);
+
+  cube_instances[3].model = &the_cube;
+  cube_instances[3].scale = 10;
+  cube_instances[3].position.x = 50;
+  cube_instances[3].position.y = 0;
+  cube_instances[3].position.z = -90;
+  cube_instances[3].orientation = mat4x4_rotate_y(135);
+  setup_instance_transform(&cube_instances[3]);
 
   // Position the camera
   camera.position.x = -3;
@@ -773,15 +780,19 @@ int main(void) {
 
   init_palette();
 
-  init_depth_buffer();
+  while (render_example_state < 3) {
+    init_depth_buffer();
 
-  clear_screen(shade_color(7, 31));
+    clear_screen(shade_color(7, 31));
 
-  render_scene(&camera, cube_instances, 3);
+    render_scene(&camera, cube_instances, 4);
 
-  present_buffer();
+    present_buffer();
 
-  getch();
+    getch();
+
+    render_example_state++;
+  }
 
   set_mode(0x03);
 
