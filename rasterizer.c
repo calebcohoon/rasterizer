@@ -52,7 +52,6 @@ struct vector4 {
 
 struct triangle {
   int vertex_index[3];
-  unsigned char color;
 };
 
 struct model {
@@ -67,6 +66,7 @@ struct model {
 
 struct instance {
   struct model *model;
+  unsigned char color;
   float scale;
   struct vector3 position;
   struct mat4x4 orientation;
@@ -86,7 +86,6 @@ struct camera {
 
 unsigned char back_buffer[SW * SH];
 float depth_buffer[SW * SH];
-int render_example_state = 0;
 const unsigned char font_data[CHAR_COUNT][8] = {
     /* A */ {0x00, 0x66, 0x66, 0x7E, 0x66, 0x66, 0x3C, 0x18},
     /* B */ {0x00, 0x7C, 0x66, 0x66, 0x7C, 0x66, 0x66, 0x7C},
@@ -537,45 +536,6 @@ struct vector3 compute_triangle_normal(struct vector3 *v0, struct vector3 *v1,
   return vec3_cross(&v0v1, &v0v2);
 }
 
-void draw_line(struct vector2 *p0, struct vector2 *p1, unsigned char color) {
-  struct vector2 p0_local = *p0;
-  struct vector2 p1_local = *p1;
-  int x, y, len;
-  float slope_values[SW + SH];
-  float a;
-
-  if (abs(p1_local.x - p0_local.x) > abs(p1_local.y - p0_local.y)) {
-    if (p0_local.x > p1_local.x) {
-      SWAP_VECTOR2(p0_local, p1_local);
-    }
-
-    interpolate(p0_local.x, p0_local.y, p1_local.x, p1_local.y, &slope_values,
-                &len);
-
-    for (x = p0_local.x; x <= p1_local.x; x++) {
-      set_pixel(x, slope_values[x - p0_local.x], color);
-    }
-  } else {
-    if (p0_local.y > p1_local.y) {
-      SWAP_VECTOR2(p0_local, p1_local);
-    }
-
-    interpolate(p0_local.y, p0_local.x, p1_local.y, p1_local.x, &slope_values,
-                &len);
-
-    for (y = p0_local.y; y <= p1_local.y; y++) {
-      set_pixel(slope_values[y - p0_local.y], y, color);
-    }
-  }
-}
-
-void draw_wireframe_triangle(struct vector2 *p0, struct vector2 *p1,
-                             struct vector2 *p2, unsigned char color) {
-  draw_line(p0, p1, color);
-  draw_line(p1, p2, color);
-  draw_line(p2, p0, color);
-}
-
 void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
                           struct vector2 *p2, unsigned char color) {
   struct vector2 p0_local = *p0;
@@ -636,8 +596,7 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
                 &h_segment, &h_segment_len);
 
     for (x = xl; x <= xr; x++) {
-      if (is_closer_pixel(x, y, h_segment[x - xl]) ||
-          render_example_state < 2) {
+      if (is_closer_pixel(x, y, h_segment[x - xl])) {
         set_pixel(x, y, color);
       }
     }
@@ -646,7 +605,7 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
 
 void render_triangle(struct triangle *triangle,
                      struct vector3 *transformed_verts,
-                     struct vector2 *proj_verts) {
+                     struct vector2 *proj_verts, unsigned char color) {
   struct vector3 v0 = transformed_verts[triangle->vertex_index[0]];
   struct vector3 v1 = transformed_verts[triangle->vertex_index[1]];
   struct vector3 v2 = transformed_verts[triangle->vertex_index[2]];
@@ -655,14 +614,13 @@ void render_triangle(struct triangle *triangle,
   float vert_to_camera_dot = vec3_dot(&normal, &vert_to_camera);
 
   // Cull back face geometry
-  if (vert_to_camera_dot <= 0 && render_example_state > 0) {
+  if (vert_to_camera_dot <= 0) {
     return;
   }
 
   draw_filled_triangle(&proj_verts[triangle->vertex_index[0]],
                        &proj_verts[triangle->vertex_index[1]],
-                       &proj_verts[triangle->vertex_index[2]],
-                       shade_color(triangle->color, 31));
+                       &proj_verts[triangle->vertex_index[2]], color);
 }
 
 struct vector2 viewport_to_canvas(float x, float y) {
@@ -712,10 +670,26 @@ int is_clipped(struct plane *planes, struct model *model, float scale,
   return 0;
 }
 
-void render_model(struct model *model, struct mat4x4 *matrix) {
+void render_model(struct model *model, unsigned char color,
+                  struct mat4x4 *matrix) {
   int v, t;
-  struct vector3 transformed_verts[8];
-  struct vector2 projected_verts[8];
+  struct vector3 *transformed_verts;
+  struct vector2 *projected_verts;
+
+  /* Allocate memory for transformed and projected vertices */
+  transformed_verts =
+      (struct vector3 *)malloc(model->vert_count * sizeof(struct vector3));
+  projected_verts =
+      (struct vector2 *)malloc(model->vert_count * sizeof(struct vector2));
+
+  if (!transformed_verts || !projected_verts) {
+    /* Handle allocation failure */
+    if (transformed_verts)
+      free(transformed_verts);
+    if (projected_verts)
+      free(projected_verts);
+    return;
+  }
 
   for (v = 0; v < model->vert_count; v++) {
     struct vector3 vertex = model->vertices[v];
@@ -726,13 +700,18 @@ void render_model(struct model *model, struct mat4x4 *matrix) {
         vec3_make(vertex_mult.x, vertex_mult.y, vertex_mult.z);
     projected_verts[v] = project_vertex(&vertex_mult);
 
-    // Repurpose H with the transformed Z later used with z-buffer
+    /* Repurpose H with the transformed Z later used with z-buffer */
     projected_verts[v].h = 1.0f / vertex_mult.z;
   }
 
   for (t = 0; t < model->tri_count; t++) {
-    render_triangle(&model->triangles[t], transformed_verts, projected_verts);
+    render_triangle(&model->triangles[t], transformed_verts, projected_verts,
+                    color);
   }
+
+  /* Free allocated memory */
+  free(transformed_verts);
+  free(projected_verts);
 }
 
 void render_scene(struct camera *camera, struct instance *instances, int len) {
@@ -753,73 +732,148 @@ void render_scene(struct camera *camera, struct instance *instances, int len) {
                             instances[i].scale, &transform);
 
     if (status == 0) {
-      render_model(instances[i].model, &transform);
+      render_model(instances[i].model, instances[i].color, &transform);
     }
+  }
+}
+
+struct model *generate_sphere(int divs) {
+  struct model *sphere;
+  struct vector3 *vertices;
+  struct triangle *triangles;
+  float delta_angle;
+  int d, i;
+  int vertex_count, triangle_count;
+  int i0, i1, i2;
+  float y, radius;
+
+  /* Calculate total counts */
+  vertex_count = divs * (divs + 1);
+  triangle_count = divs * divs * 2;
+
+  /* Allocate memory for the model and its components */
+  sphere = (struct model *)malloc(sizeof(struct model));
+  vertices = (struct vector3 *)malloc(vertex_count * sizeof(struct vector3));
+  triangles =
+      (struct triangle *)malloc(triangle_count * sizeof(struct triangle));
+
+  if (!sphere || !vertices || !triangles) {
+    /* Handle allocation failure */
+    if (vertices)
+      free(vertices);
+    if (triangles)
+      free(triangles);
+    if (sphere)
+      free(sphere);
+    return NULL;
+  }
+
+  delta_angle = 2.0f * PI / (float)divs;
+
+  /* Generate vertices */
+  for (d = 0; d < divs + 1; d++) {
+    y = (2.0f / (float)divs) * ((float)d - (float)divs / 2.0f);
+    radius = sqrt(1.0f - y * y);
+
+    for (i = 0; i < divs; i++) {
+      int vertex_index = d * divs + i;
+      vertices[vertex_index].x = radius * cos(i * delta_angle);
+      vertices[vertex_index].y = y;
+      vertices[vertex_index].z = radius * sin(i * delta_angle);
+    }
+  }
+
+  /* Generate triangles */
+  for (d = 0; d < divs; d++) {
+    for (i = 0; i < divs; i++) {
+      int triangle_index = (d * divs + i) * 2;
+
+      /* Calculate vertex indices */
+      i0 = d * divs + i;
+      i1 = (d + 1) * divs + ((i + 1) % divs);
+      i2 = divs * d + ((i + 1) % divs);
+
+      /* First triangle */
+      triangles[triangle_index].vertex_index[0] = i0;
+      triangles[triangle_index].vertex_index[1] = i1;
+      triangles[triangle_index].vertex_index[2] = i2;
+
+      /* Second triangle */
+      triangles[triangle_index + 1].vertex_index[0] = i0;
+      triangles[triangle_index + 1].vertex_index[1] = i0 + divs;
+      triangles[triangle_index + 1].vertex_index[2] = i1;
+    }
+  }
+
+  /* Setup the model structure */
+  sphere->name = "sphere";
+  sphere->vertices = vertices;
+  sphere->triangles = triangles;
+  sphere->vert_count = vertex_count;
+  sphere->tri_count = triangle_count;
+  sphere->center = vec3_make(0.0f, 0.0f, 0.0f);
+  sphere->radius = 1.0f;
+
+  return sphere;
+}
+
+void free_model(struct model *model) {
+  if (model) {
+    if (model->vertices)
+      free(model->vertices);
+    if (model->triangles)
+      free(model->triangles);
+    free(model);
   }
 }
 
 int main(void) {
   float sqrt_2 = 1.0f / sqrt(2);
   struct camera camera;
-  struct vector3 vertices[8] = {{1, 1, 1},    {-1, 1, 1}, {-1, -1, 1},
-                                {1, -1, 1},   {1, 1, -1}, {-1, 1, -1},
-                                {-1, -1, -1}, {1, -1, -1}};
-  struct triangle triangles[12] = {
-      {0, 1, 2, 0}, {0, 2, 3, 0}, {4, 0, 3, 1}, {4, 3, 7, 1},
-      {5, 4, 7, 2}, {5, 7, 6, 2}, {1, 5, 6, 3}, {1, 6, 2, 3},
-      {4, 5, 1, 4}, {4, 1, 0, 4}, {2, 6, 7, 5}, {2, 7, 3, 5},
-  };
+  struct model *sphere = generate_sphere(13);
+  struct instance instances[4];
 
-  // For drawing the instances of the cube
-  struct model the_cube;
-  struct instance cube_instances[4];
+  instances[0].model = sphere;
+  instances[0].scale = 1;
+  instances[0].position.x = 0;
+  instances[0].position.y = -1;
+  instances[0].position.z = 3;
+  instances[0].orientation = mat4x4_identity();
+  instances[0].color = shade_color(0, 31);
+  setup_instance_transform(&instances[0]);
 
-  // Setup the cube instances
-  the_cube.name = "cool cube";
-  the_cube.vert_count = 8;
-  the_cube.tri_count = 12;
-  the_cube.vertices = vertices;
-  the_cube.triangles = triangles;
-  the_cube.radius = sqrt(3);
-  the_cube.center = vec3_make(0, 0, 0);
+  instances[1].model = sphere;
+  instances[1].scale = 1;
+  instances[1].position.x = -2;
+  instances[1].position.y = 0;
+  instances[1].position.z = 4;
+  instances[1].orientation = mat4x4_identity();
+  instances[1].color = shade_color(1, 31);
+  setup_instance_transform(&instances[1]);
 
-  cube_instances[0].model = &the_cube;
-  cube_instances[0].scale = 0.75f;
-  cube_instances[0].position.x = -1.5f;
-  cube_instances[0].position.y = 0;
-  cube_instances[0].position.z = 7;
-  cube_instances[0].orientation = mat4x4_identity();
-  setup_instance_transform(&cube_instances[0]);
+  instances[2].model = sphere;
+  instances[2].scale = 1;
+  instances[2].position.x = 2;
+  instances[2].position.y = 0;
+  instances[2].position.z = 4;
+  instances[2].orientation = mat4x4_identity();
+  instances[2].color = shade_color(2, 31);
+  setup_instance_transform(&instances[2]);
 
-  cube_instances[1].model = &the_cube;
-  cube_instances[1].scale = 1;
-  cube_instances[1].position.x = 1.25f;
-  cube_instances[1].position.y = 2.5f;
-  cube_instances[1].position.z = 7.5f;
-  cube_instances[1].orientation = mat4x4_rotate_y(195);
-  setup_instance_transform(&cube_instances[1]);
-
-  cube_instances[2].model = &the_cube;
-  cube_instances[2].scale = 15;
-  cube_instances[2].position.x = 50;
-  cube_instances[2].position.y = 0;
-  cube_instances[2].position.z = 90;
-  cube_instances[2].orientation = mat4x4_rotate_y(130);
-  setup_instance_transform(&cube_instances[2]);
-
-  cube_instances[3].model = &the_cube;
-  cube_instances[3].scale = 10;
-  cube_instances[3].position.x = 50;
-  cube_instances[3].position.y = 0;
-  cube_instances[3].position.z = -90;
-  cube_instances[3].orientation = mat4x4_rotate_y(135);
-  setup_instance_transform(&cube_instances[3]);
+  instances[3].model = sphere;
+  instances[3].scale = 1; // 5000;
+  instances[3].position.x = 0;
+  instances[3].position.y = 0; //-5001;
+  instances[3].position.z = 0;
+  instances[3].orientation = mat4x4_identity();
+  instances[3].color = shade_color(3, 31);
+  setup_instance_transform(&instances[3]);
 
   // Position the camera
-  camera.position.x = -3;
-  camera.position.y = 1;
-  camera.position.z = 2;
-  camera.orientation = mat4x4_rotate_y(-30);
+  camera.position.x = 0;
+  camera.position.y = 0;
+  camera.position.z = 0;
+  camera.orientation = mat4x4_identity();
 
   // Near plane
   camera.clipping_planes[0].normal = vec3_make(0, 0, 1);
@@ -845,33 +899,19 @@ int main(void) {
 
   init_palette();
 
-  while (render_example_state < 3) {
-    init_depth_buffer();
+  init_depth_buffer();
 
-    clear_screen(shade_color(7, 31));
+  clear_screen(shade_color(7, 31) /* White */);
 
-    render_scene(&camera, cube_instances, 4);
+  render_scene(&camera, instances, 4);
 
-    if (render_example_state == 0) {
-      draw_text(-155, 88, "BACK FACE CULLING OFF", shade_color(0, 31));
-    } else if (render_example_state >= 1) {
-      draw_text(-155, 88, "BACK FACE CULLING ON", shade_color(1, 31));
-    }
+  present_buffer();
 
-    if (render_example_state == 1) {
-      draw_text(-155, 88 - CHAR_HEIGHT - 5, "ZBUFFER OFF", shade_color(0, 31));
-    } else if (render_example_state == 2) {
-      draw_text(-155, 88 - CHAR_HEIGHT - 5, "ZBUFFER ON", shade_color(1, 31));
-    }
-
-    present_buffer();
-
-    getch();
-
-    render_example_state++;
-  }
+  getch();
 
   set_mode(0x03);
+
+  free_model(sphere);
 
   return 0;
 }
