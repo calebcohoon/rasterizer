@@ -25,3 +25,5 @@ I've been following the book Computer Graphics from Scratch (https://gabrielgamb
 ![Screenshot 2025-02-04 205717](https://github.com/user-attachments/assets/597dac8e-e7df-4a83-a32b-7af43c718184)
 
 ![Screenshot 2025-02-06 190003](https://github.com/user-attachments/assets/f375b083-9759-453e-a4fd-f9219453d0cb)
+
+![Screenshot 2025-02-09 104001](https://github.com/user-attachments/assets/81baad22-d5ec-49c4-8f85-a7f3daf7e262)
