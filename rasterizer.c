@@ -548,6 +548,11 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
   int x01_len, x12_len, x02_len;
   int h01_len, h12_len, h02_len;
 
+  // Add bounds checking for y-coordinates
+  if (abs(p0_local.y) >= SH || abs(p1_local.y) >= SH || abs(p2_local.y) >= SH) {
+    return;
+  }
+
   if (p1_local.y < p0_local.y) {
     SWAP_VECTOR2(p1_local, p0_local);
   }
@@ -625,9 +630,10 @@ void render_triangle(struct triangle *triangle,
 
 struct vector2 viewport_to_canvas(float x, float y) {
   struct vector2 result;
+  float aspect_ratio = 1.2f; // Account for having non-square pixels
 
   result.x = x * SW / VIEWPORT_SIZE;
-  result.y = y * SH / VIEWPORT_SIZE;
+  result.y = (y * aspect_ratio) * SH / VIEWPORT_SIZE;
 
   return result;
 }
@@ -747,18 +753,15 @@ struct model *generate_sphere(int divs) {
   int i0, i1, i2;
   float y, radius;
 
-  /* Calculate total counts */
   vertex_count = divs * (divs + 1);
   triangle_count = divs * divs * 2;
 
-  /* Allocate memory for the model and its components */
   sphere = (struct model *)malloc(sizeof(struct model));
   vertices = (struct vector3 *)malloc(vertex_count * sizeof(struct vector3));
   triangles =
       (struct triangle *)malloc(triangle_count * sizeof(struct triangle));
 
   if (!sphere || !vertices || !triangles) {
-    /* Handle allocation failure */
     if (vertices)
       free(vertices);
     if (triangles)
@@ -770,7 +773,6 @@ struct model *generate_sphere(int divs) {
 
   delta_angle = 2.0f * PI / (float)divs;
 
-  /* Generate vertices */
   for (d = 0; d < divs + 1; d++) {
     y = (2.0f / (float)divs) * ((float)d - (float)divs / 2.0f);
     radius = sqrt(1.0f - y * y);
@@ -783,29 +785,24 @@ struct model *generate_sphere(int divs) {
     }
   }
 
-  /* Generate triangles */
   for (d = 0; d < divs; d++) {
     for (i = 0; i < divs; i++) {
       int triangle_index = (d * divs + i) * 2;
 
-      /* Calculate vertex indices */
       i0 = d * divs + i;
       i1 = (d + 1) * divs + ((i + 1) % divs);
       i2 = divs * d + ((i + 1) % divs);
 
-      /* First triangle */
       triangles[triangle_index].vertex_index[0] = i0;
       triangles[triangle_index].vertex_index[1] = i1;
       triangles[triangle_index].vertex_index[2] = i2;
 
-      /* Second triangle */
       triangles[triangle_index + 1].vertex_index[0] = i0;
       triangles[triangle_index + 1].vertex_index[1] = i0 + divs;
       triangles[triangle_index + 1].vertex_index[2] = i1;
     }
   }
 
-  /* Setup the model structure */
   sphere->name = "sphere";
   sphere->vertices = vertices;
   sphere->triangles = triangles;
@@ -815,6 +812,75 @@ struct model *generate_sphere(int divs) {
   sphere->radius = 1.0f;
 
   return sphere;
+}
+
+struct model *generate_plane(int divs, float size) {
+  struct model *plane;
+  struct vector3 *vertices;
+  struct triangle *triangles;
+  int vertex_count, triangle_count;
+  int x, z, i;
+  float half_size, step;
+
+  vertex_count = divs * divs;
+  triangle_count = (divs - 1) * (divs - 1) * 2;
+
+  plane = (struct model *)malloc(sizeof(struct model));
+  vertices = (struct vector3 *)malloc(vertex_count * sizeof(struct vector3));
+  triangles =
+      (struct triangle *)malloc(triangle_count * sizeof(struct triangle));
+
+  if (!plane || !vertices || !triangles) {
+    if (vertices)
+      free(vertices);
+    if (triangles)
+      free(triangles);
+    if (plane)
+      free(plane);
+    return NULL;
+  }
+
+  half_size = size * 0.5f;
+  step = size / (float)(divs - 1);
+
+  for (z = 0; z < divs; z++) {
+    for (x = 0; x < divs; x++) {
+      int vertex_index = z * divs + x;
+      vertices[vertex_index].x = -half_size + x * step;
+      vertices[vertex_index].y = 0.0f;
+      vertices[vertex_index].z = -half_size + z * step;
+    }
+  }
+
+  i = 0;
+  for (z = 0; z < divs - 1; z++) {
+    for (x = 0; x < divs - 1; x++) {
+      int top_left = z * divs + x;
+      int top_right = top_left + 1;
+      int bottom_left = (z + 1) * divs + x;
+      int bottom_right = bottom_left + 1;
+
+      triangles[i].vertex_index[0] = top_left;
+      triangles[i].vertex_index[1] = bottom_left;
+      triangles[i].vertex_index[2] = top_right;
+      i++;
+
+      triangles[i].vertex_index[0] = bottom_left;
+      triangles[i].vertex_index[1] = bottom_right;
+      triangles[i].vertex_index[2] = top_right;
+      i++;
+    }
+  }
+
+  plane->name = "plane";
+  plane->vertices = vertices;
+  plane->triangles = triangles;
+  plane->vert_count = vertex_count;
+  plane->tri_count = triangle_count;
+  plane->center = vec3_make(0.0f, 0.0f, 0.0f);
+  plane->radius = (float)sqrt(2 * (size * size)) * 0.5f;
+
+  return plane;
 }
 
 void free_model(struct model *model) {
@@ -831,6 +897,7 @@ int main(void) {
   float sqrt_2 = 1.0f / sqrt(2);
   struct camera camera;
   struct model *sphere = generate_sphere(13);
+  struct model *plane = generate_plane(20, 30.0f);
   struct instance instances[4];
 
   instances[0].model = sphere;
@@ -860,11 +927,9 @@ int main(void) {
   instances[2].color = shade_color(2, 31);
   setup_instance_transform(&instances[2]);
 
-  instances[3].model = sphere;
-  instances[3].scale = 1; // 5000;
-  instances[3].position.x = 0;
-  instances[3].position.y = 0; //-5001;
-  instances[3].position.z = 0;
+  instances[3].model = plane;
+  instances[3].scale = 1.0f;
+  instances[3].position = vec3_make(0.0f, -1.0f, 10.0f);
   instances[3].orientation = mat4x4_identity();
   instances[3].color = shade_color(3, 31);
   setup_instance_transform(&instances[3]);
@@ -872,7 +937,7 @@ int main(void) {
   // Position the camera
   camera.position.x = 0;
   camera.position.y = 0;
-  camera.position.z = 0;
+  camera.position.z = -0.5f;
   camera.orientation = mat4x4_identity();
 
   // Near plane
@@ -912,6 +977,7 @@ int main(void) {
   set_mode(0x03);
 
   free_model(sphere);
+  free_model(plane);
 
   return 0;
 }
