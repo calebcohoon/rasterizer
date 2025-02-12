@@ -16,6 +16,9 @@
 #define CHAR_HEIGHT 8
 #define FIRST_CHAR 65
 #define CHAR_COUNT 26
+#define AMBIENT_LIGHT 0
+#define POINT_LIGHT 1
+#define DIRECTIONAL_LIGHT 2
 
 #define SWAP_VECTOR2(a, b)                                                     \
   do {                                                                         \
@@ -52,6 +55,7 @@ struct vector4 {
 
 struct triangle {
   int vertex_index[3];
+  struct vector3 normals[3];
 };
 
 struct model {
@@ -82,6 +86,18 @@ struct camera {
   struct vector3 position;
   struct mat4x4 orientation;
   struct plane clipping_planes[5];
+};
+
+struct light {
+  int type;
+  float intensity;
+  struct vector3 vector;
+};
+
+struct edge {
+  float edge1[SH];
+  float edge2[SH];
+  int edge1_len;
 };
 
 unsigned char back_buffer[SW * SH];
@@ -536,17 +552,31 @@ struct vector3 compute_triangle_normal(struct vector3 *v0, struct vector3 *v1,
   return vec3_cross(&v0v1, &v0v2);
 }
 
+struct edge edge_interpolate(float y0, float v0, float y1, float v1, float y2,
+                             float v2) {
+  float v01[SH], v12[SH], v02[SH];
+  int v01_len, v12_len, v02_len;
+  struct edge result;
+
+  interpolate(y0, v0, y1, v1, v01, &v01_len);
+  interpolate(y1, v1, y2, v2, v12, &v12_len);
+  interpolate(y0, v0, y2, v2, result.edge1, &result.edge1_len);
+  concat_sides(v01, v01_len, v12, v12_len, result.edge2);
+
+  return result;
+}
+
 void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
-                          struct vector2 *p2, unsigned char color) {
+                          struct vector2 *p2, struct triangle *triangle,
+                          struct mat4x4 *transform, unsigned char color) {
   struct vector2 p0_local = *p0;
   struct vector2 p1_local = *p1;
   struct vector2 p2_local = *p2;
+  struct vector4 normals[3];
+  struct vector4 n1v4, n2v4, n3v4;
+  struct edge x_edge, z_edge;
   int m, x, y;
   float *x_left, *x_right, *h_left, *h_right;
-  float x01[SH], x12[SH], x02[SH], x012[SH];
-  float h01[SH], h12[SH], h02[SH], h012[SH];
-  int x01_len, x12_len, x02_len;
-  int h01_len, h12_len, h02_len;
 
   // Add bounds checking for y-coordinates
   if (abs(p0_local.y) >= SH || abs(p1_local.y) >= SH || abs(p2_local.y) >= SH) {
@@ -565,30 +595,34 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
     SWAP_VECTOR2(p2_local, p1_local);
   }
 
-  interpolate(p0_local.y, p0_local.x, p1_local.y, p1_local.x, &x01, &x01_len);
-  interpolate(p0_local.y, p0_local.h, p1_local.y, p1_local.h, &h01, &h01_len);
+  // Calculate normals for lighting (WIP)
+  n1v4 = vec4_make(triangle->normals[0].x, triangle->normals[0].y,
+                   triangle->normals[0].z, 1);
+  normals[0] = mat4x4_mul_vector4(transform, &n1v4);
+  n2v4 = vec4_make(triangle->normals[1].x, triangle->normals[1].y,
+                   triangle->normals[1].z, 1);
+  normals[1] = mat4x4_mul_vector4(transform, &n2v4);
+  n3v4 = vec4_make(triangle->normals[2].x, triangle->normals[2].y,
+                   triangle->normals[2].z, 1);
+  normals[2] = mat4x4_mul_vector4(transform, &n3v4);
 
-  interpolate(p1_local.y, p1_local.x, p2_local.y, p2_local.x, &x12, &x12_len);
-  interpolate(p1_local.y, p1_local.h, p2_local.y, p2_local.h, &h12, &h12_len);
+  // Compute attribute values at the edges
+  x_edge = edge_interpolate(p0_local.y, p0_local.x, p1_local.y, p1_local.x,
+                            p2_local.y, p2_local.x);
+  z_edge = edge_interpolate(p0_local.y, p0_local.h, p1_local.y, p1_local.h,
+                            p2_local.y, p2_local.h);
+  m = x_edge.edge1_len / 2;
 
-  interpolate(p0_local.y, p0_local.x, p2_local.y, p2_local.x, &x02, &x02_len);
-  interpolate(p0_local.y, p0_local.h, p2_local.y, p2_local.h, &h02, &h02_len);
-
-  concat_sides(&x01, x01_len, &x12, x12_len, &x012);
-  concat_sides(&h01, h01_len, &h12, h12_len, &h012);
-
-  m = x02_len / 2;
-
-  if (x02[m] < x012[m]) {
-    x_left = x02;
-    h_left = h02;
-    x_right = x012;
-    h_right = h012;
+  if (x_edge.edge1[m] < x_edge.edge2[m]) {
+    x_left = x_edge.edge1;
+    x_right = x_edge.edge2;
+    h_left = z_edge.edge1;
+    h_right = z_edge.edge2;
   } else {
-    x_left = x012;
-    h_left = h012;
-    x_right = x02;
-    h_right = h02;
+    x_right = x_edge.edge1;
+    x_left = x_edge.edge2;
+    h_right = z_edge.edge1;
+    h_left = z_edge.edge2;
   }
 
   for (y = p0_local.y; y <= p2_local.y; y++) {
@@ -610,7 +644,8 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
 
 void render_triangle(struct triangle *triangle,
                      struct vector3 *transformed_verts,
-                     struct vector2 *proj_verts, unsigned char color) {
+                     struct vector2 *proj_verts, struct mat4x4 *transform,
+                     unsigned char color) {
   struct vector3 v0 = transformed_verts[triangle->vertex_index[0]];
   struct vector3 v1 = transformed_verts[triangle->vertex_index[1]];
   struct vector3 v2 = transformed_verts[triangle->vertex_index[2]];
@@ -625,7 +660,8 @@ void render_triangle(struct triangle *triangle,
 
   draw_filled_triangle(&proj_verts[triangle->vertex_index[0]],
                        &proj_verts[triangle->vertex_index[1]],
-                       &proj_verts[triangle->vertex_index[2]], color);
+                       &proj_verts[triangle->vertex_index[2]], triangle,
+                       transform, color);
 }
 
 struct vector2 viewport_to_canvas(float x, float y) {
@@ -677,7 +713,7 @@ int is_clipped(struct plane *planes, struct model *model, float scale,
 }
 
 void render_model(struct model *model, unsigned char color,
-                  struct mat4x4 *matrix) {
+                  struct mat4x4 *transform) {
   int v, t;
   struct vector3 *transformed_verts;
   struct vector2 *projected_verts;
@@ -700,7 +736,7 @@ void render_model(struct model *model, unsigned char color,
   for (v = 0; v < model->vert_count; v++) {
     struct vector3 vertex = model->vertices[v];
     struct vector4 vertex_h = vec4_make(vertex.x, vertex.y, vertex.z, 1);
-    struct vector4 vertex_mult = mat4x4_mul_vector4(matrix, &vertex_h);
+    struct vector4 vertex_mult = mat4x4_mul_vector4(transform, &vertex_h);
 
     transformed_verts[v] =
         vec3_make(vertex_mult.x, vertex_mult.y, vertex_mult.z);
@@ -712,7 +748,7 @@ void render_model(struct model *model, unsigned char color,
 
   for (t = 0; t < model->tri_count; t++) {
     render_triangle(&model->triangles[t], transformed_verts, projected_verts,
-                    color);
+                    transform, color);
   }
 
   /* Free allocated memory */
