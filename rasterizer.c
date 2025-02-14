@@ -55,7 +55,6 @@ struct vector4 {
 
 struct triangle {
   int vertex_index[3];
-  struct vector3 normals[3];
 };
 
 struct model {
@@ -92,12 +91,6 @@ struct light {
   int type;
   float intensity;
   struct vector3 vector;
-};
-
-struct edge {
-  float edge1[SH];
-  float edge2[SH];
-  int edge1_len;
 };
 
 unsigned char back_buffer[SW * SH];
@@ -552,31 +545,67 @@ struct vector3 compute_triangle_normal(struct vector3 *v0, struct vector3 *v1,
   return vec3_cross(&v0v1, &v0v2);
 }
 
-struct edge edge_interpolate(float y0, float v0, float y1, float v1, float y2,
-                             float v2) {
-  float v01[SH], v12[SH], v02[SH];
-  int v01_len, v12_len, v02_len;
-  struct edge result;
+float compute_illumination(struct vector3 *vertex, struct vector3 *normal,
+                           struct camera *camera, struct light *lights,
+                           int light_len) {
+  float illumination = 0.0f, cos_alpha;
+  struct vector3 vl;
+  int l;
 
-  interpolate(y0, v0, y1, v1, v01, &v01_len);
-  interpolate(y1, v1, y2, v2, v12, &v12_len);
-  interpolate(y0, v0, y2, v2, result.edge1, &result.edge1_len);
-  concat_sides(v01, v01_len, v12, v12_len, result.edge2);
+  for (l = 0; l < light_len; l++) {
+    struct light *curr_light = &lights[l];
 
-  return result;
+    if (curr_light->type == AMBIENT_LIGHT) {
+      illumination += curr_light->intensity;
+      continue;
+    }
+
+    if (curr_light->type == DIRECTIONAL_LIGHT) {
+      struct vector4 light_vector = vec4_make(
+          curr_light->vector.x, curr_light->vector.y, curr_light->vector.z, 1);
+      struct mat4x4 camera_matrix = mat4x4_transpose(&camera->orientation);
+      struct vector4 rotated_light =
+          mat4x4_mul_vector4(&camera_matrix, &light_vector);
+
+      vl = vec3_make(rotated_light.x, rotated_light.y, rotated_light.z);
+    } else if (curr_light->type == POINT_LIGHT) {
+      struct vector4 light_vector = vec4_make(
+          curr_light->vector.x, curr_light->vector.y, curr_light->vector.z, 1);
+      struct vector3 camera_pos_inv = vec3_mul(&camera->position, -1);
+      struct mat4x4 camera_translation =
+          mat4x4_translate_vector3(&camera_pos_inv);
+      struct mat4x4 camera_transposed = mat4x4_transpose(&camera->orientation);
+      struct mat4x4 camera_matrix =
+          mat4x4_mul_mat4x4(&camera_transposed, &camera_translation);
+      struct vector4 transformed_light =
+          mat4x4_mul_vector4(&camera_matrix, &light_vector);
+      struct vector3 transformed_light_v3 = vec3_make(
+          transformed_light.x, transformed_light.y, transformed_light.z);
+      struct vector3 vertex_inv = vec3_mul(vertex, -1);
+      vl = vec3_add(&vertex_inv, &transformed_light_v3);
+    }
+
+    cos_alpha = vec3_dot(normal, &vl) / (vec3_len(&vl) * vec3_len(normal));
+    if (cos_alpha > 0) {
+      illumination += cos_alpha * curr_light->intensity;
+    }
+  }
+
+  return illumination;
 }
 
 void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
-                          struct vector2 *p2, struct triangle *triangle,
-                          struct mat4x4 *transform, unsigned char color) {
+                          struct vector2 *p2, unsigned char color) {
   struct vector2 p0_local = *p0;
   struct vector2 p1_local = *p1;
   struct vector2 p2_local = *p2;
-  struct vector4 normals[3];
-  struct vector4 n1v4, n2v4, n3v4;
-  struct edge x_edge, z_edge;
   int m, x, y;
   float *x_left, *x_right, *h_left, *h_right;
+  float x01[SH], x12[SH], x02[SH], x012[SH];
+  float h01[SH], h12[SH], h02[SH], h012[SH];
+  int x01_len, x12_len, x02_len;
+  int h01_len, h12_len, h02_len;
+  float intensity = 0;
 
   // Add bounds checking for y-coordinates
   if (abs(p0_local.y) >= SH || abs(p1_local.y) >= SH || abs(p2_local.y) >= SH) {
@@ -595,34 +624,30 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
     SWAP_VECTOR2(p2_local, p1_local);
   }
 
-  // Calculate normals for lighting (WIP)
-  n1v4 = vec4_make(triangle->normals[0].x, triangle->normals[0].y,
-                   triangle->normals[0].z, 1);
-  normals[0] = mat4x4_mul_vector4(transform, &n1v4);
-  n2v4 = vec4_make(triangle->normals[1].x, triangle->normals[1].y,
-                   triangle->normals[1].z, 1);
-  normals[1] = mat4x4_mul_vector4(transform, &n2v4);
-  n3v4 = vec4_make(triangle->normals[2].x, triangle->normals[2].y,
-                   triangle->normals[2].z, 1);
-  normals[2] = mat4x4_mul_vector4(transform, &n3v4);
+  interpolate(p0_local.y, p0_local.x, p1_local.y, p1_local.x, &x01, &x01_len);
+  interpolate(p0_local.y, p0_local.h, p1_local.y, p1_local.h, &h01, &h01_len);
 
-  // Compute attribute values at the edges
-  x_edge = edge_interpolate(p0_local.y, p0_local.x, p1_local.y, p1_local.x,
-                            p2_local.y, p2_local.x);
-  z_edge = edge_interpolate(p0_local.y, p0_local.h, p1_local.y, p1_local.h,
-                            p2_local.y, p2_local.h);
-  m = x_edge.edge1_len / 2;
+  interpolate(p1_local.y, p1_local.x, p2_local.y, p2_local.x, &x12, &x12_len);
+  interpolate(p1_local.y, p1_local.h, p2_local.y, p2_local.h, &h12, &h12_len);
 
-  if (x_edge.edge1[m] < x_edge.edge2[m]) {
-    x_left = x_edge.edge1;
-    x_right = x_edge.edge2;
-    h_left = z_edge.edge1;
-    h_right = z_edge.edge2;
+  interpolate(p0_local.y, p0_local.x, p2_local.y, p2_local.x, &x02, &x02_len);
+  interpolate(p0_local.y, p0_local.h, p2_local.y, p2_local.h, &h02, &h02_len);
+
+  concat_sides(&x01, x01_len, &x12, x12_len, &x012);
+  concat_sides(&h01, h01_len, &h12, h12_len, &h012);
+
+  m = x02_len / 2;
+
+  if (x02[m] < x012[m]) {
+    x_left = x02;
+    h_left = h02;
+    x_right = x012;
+    h_right = h012;
   } else {
-    x_right = x_edge.edge1;
-    x_left = x_edge.edge2;
-    h_right = z_edge.edge1;
-    h_left = z_edge.edge2;
+    x_left = x012;
+    h_left = h012;
+    x_right = x02;
+    h_right = h02;
   }
 
   for (y = p0_local.y; y <= p2_local.y; y++) {
@@ -644,24 +669,33 @@ void draw_filled_triangle(struct vector2 *p0, struct vector2 *p1,
 
 void render_triangle(struct triangle *triangle,
                      struct vector3 *transformed_verts,
-                     struct vector2 *proj_verts, struct mat4x4 *transform,
-                     unsigned char color) {
+                     struct vector2 *proj_verts, unsigned char color,
+                     struct camera *camera, struct light *lights,
+                     int light_len) {
   struct vector3 v0 = transformed_verts[triangle->vertex_index[0]];
   struct vector3 v1 = transformed_verts[triangle->vertex_index[1]];
   struct vector3 v2 = transformed_verts[triangle->vertex_index[2]];
   struct vector3 normal = compute_triangle_normal(&v0, &v1, &v2);
   struct vector3 vert_to_camera = vec3_mul(&v0, -1);
-  float vert_to_camera_dot = vec3_dot(&normal, &vert_to_camera);
+  struct vector3 center, normal_inv;
+  float intensity;
 
   // Cull back face geometry
-  if (vert_to_camera_dot <= 0) {
+  if (vec3_dot(&normal, &vert_to_camera) <= 0) {
     return;
   }
 
+  // Compute lighting intensity
+  normal_inv = compute_triangle_normal(&v0, &v1, &v2);
+  center = vec3_make((v0.x + v1.x + v2.x) / 3.0f, (v0.y + v1.y + v2.y) / 3.0f,
+                     (v0.z + v1.z + v2.z) / 3.0f);
+  intensity =
+      compute_illumination(&center, &normal_inv, camera, lights, light_len);
+
   draw_filled_triangle(&proj_verts[triangle->vertex_index[0]],
                        &proj_verts[triangle->vertex_index[1]],
-                       &proj_verts[triangle->vertex_index[2]], triangle,
-                       transform, color);
+                       &proj_verts[triangle->vertex_index[2]],
+                       shade_color(color, intensity));
 }
 
 struct vector2 viewport_to_canvas(float x, float y) {
@@ -713,7 +747,8 @@ int is_clipped(struct plane *planes, struct model *model, float scale,
 }
 
 void render_model(struct model *model, unsigned char color,
-                  struct mat4x4 *transform) {
+                  struct mat4x4 *matrix, struct camera *camera,
+                  struct light *lights, int light_len) {
   int v, t;
   struct vector3 *transformed_verts;
   struct vector2 *projected_verts;
@@ -736,7 +771,7 @@ void render_model(struct model *model, unsigned char color,
   for (v = 0; v < model->vert_count; v++) {
     struct vector3 vertex = model->vertices[v];
     struct vector4 vertex_h = vec4_make(vertex.x, vertex.y, vertex.z, 1);
-    struct vector4 vertex_mult = mat4x4_mul_vector4(transform, &vertex_h);
+    struct vector4 vertex_mult = mat4x4_mul_vector4(matrix, &vertex_h);
 
     transformed_verts[v] =
         vec3_make(vertex_mult.x, vertex_mult.y, vertex_mult.z);
@@ -748,7 +783,7 @@ void render_model(struct model *model, unsigned char color,
 
   for (t = 0; t < model->tri_count; t++) {
     render_triangle(&model->triangles[t], transformed_verts, projected_verts,
-                    transform, color);
+                    color, camera, lights, light_len);
   }
 
   /* Free allocated memory */
@@ -756,7 +791,8 @@ void render_model(struct model *model, unsigned char color,
   free(projected_verts);
 }
 
-void render_scene(struct camera *camera, struct instance *instances, int len) {
+void render_scene(struct camera *camera, struct instance *instances,
+                  int instance_len, struct light *lights, int light_len) {
   int i;
   struct mat4x4 cameraMatrix, m1, m2;
   struct vector3 neg_camera_pos;
@@ -766,7 +802,7 @@ void render_scene(struct camera *camera, struct instance *instances, int len) {
   m2 = mat4x4_translate_vector3(&neg_camera_pos);
   cameraMatrix = mat4x4_mul_mat4x4(&m1, &m2);
 
-  for (i = 0; i < len; i++) {
+  for (i = 0; i < instance_len; i++) {
     struct mat4x4 transform =
         mat4x4_mul_mat4x4(&cameraMatrix, &instances[i].transform);
 
@@ -774,7 +810,8 @@ void render_scene(struct camera *camera, struct instance *instances, int len) {
                             instances[i].scale, &transform);
 
     if (status == 0) {
-      render_model(instances[i].model, instances[i].color, &transform);
+      render_model(instances[i].model, instances[i].color, &transform, camera,
+                   lights, light_len);
     }
   }
 }
@@ -935,6 +972,18 @@ int main(void) {
   struct model *sphere = generate_sphere(13);
   struct model *plane = generate_plane(20, 30.0f);
   struct instance instances[4];
+  struct light lights[3];
+
+  lights[0].type = AMBIENT_LIGHT;
+  lights[0].intensity = 0.3f;
+
+  lights[1].type = DIRECTIONAL_LIGHT;
+  lights[1].intensity = 0.2f;
+  lights[1].vector = vec3_make(-1, 0, 4);
+
+  lights[2].type = POINT_LIGHT;
+  lights[2].intensity = 0.6f;
+  lights[2].vector = vec3_make(-2, 2, -2);
 
   instances[0].model = sphere;
   instances[0].scale = 1;
@@ -942,7 +991,7 @@ int main(void) {
   instances[0].position.y = -1;
   instances[0].position.z = 3;
   instances[0].orientation = mat4x4_identity();
-  instances[0].color = shade_color(0, 31);
+  instances[0].color = 0;
   setup_instance_transform(&instances[0]);
 
   instances[1].model = sphere;
@@ -951,7 +1000,7 @@ int main(void) {
   instances[1].position.y = 0;
   instances[1].position.z = 4;
   instances[1].orientation = mat4x4_identity();
-  instances[1].color = shade_color(1, 31);
+  instances[1].color = 1;
   setup_instance_transform(&instances[1]);
 
   instances[2].model = sphere;
@@ -960,14 +1009,14 @@ int main(void) {
   instances[2].position.y = 0;
   instances[2].position.z = 4;
   instances[2].orientation = mat4x4_identity();
-  instances[2].color = shade_color(2, 31);
+  instances[2].color = 2;
   setup_instance_transform(&instances[2]);
 
   instances[3].model = plane;
   instances[3].scale = 1.0f;
   instances[3].position = vec3_make(0.0f, -1.0f, 10.0f);
   instances[3].orientation = mat4x4_identity();
-  instances[3].color = shade_color(3, 31);
+  instances[3].color = 3;
   setup_instance_transform(&instances[3]);
 
   // Position the camera
@@ -1004,7 +1053,7 @@ int main(void) {
 
   clear_screen(shade_color(7, 31) /* White */);
 
-  render_scene(&camera, instances, 4);
+  render_scene(&camera, instances, 4, lights, 3);
 
   present_buffer();
 
