@@ -174,26 +174,22 @@ void init_palette(void) {
   unsigned char index;
   float intensity;
   unsigned char base_colors[8][3] = {
-      {63, 0, 0},   // Red
-      {0, 63, 0},   // Green
-      {0, 0, 63},   // Blue
-      {63, 63, 0},  // Yellow
-      {63, 0, 63},  // Magenta
-      {0, 63, 63},  // Cyan
-      {32, 63, 63}, // Teal
-      {32, 63, 63}  // Teal (duplicate, last reserved for white)
+      {63, 0, 0}, // Red
+      {0, 63, 0}, // Green
+      {0, 0, 63}, // Blue
+      {63, 63, 0} // Yellow
   };
 
   // Build an optimized palette for the main colors being used
-  for (color = 0; color < 8; color++) {
-    for (shade = 0; shade < 32; shade++) {
-      index = color * 32 + shade;
-      intensity = shade / 31.0f;
+  for (color = 0; color < 4; color++) {
+    for (shade = 0; shade < 64; shade++) {
+      index = color * 64 + shade;
+      intensity = shade / 63.0f;
 
       outp(0x3C8, index);
 
       // Add a single shade of white in the last color's shade
-      if (color == 7 && shade == 31) {
+      if (color == 3 && shade == 63) {
         outp(0x3C9, 63);
         outp(0x3C9, 63);
         outp(0x3C9, 63);
@@ -217,8 +213,8 @@ unsigned char shade_color(unsigned char color, float intensity) {
   if (intensity < 0.0f)
     intensity = 0.0f;
 
-  shade = (unsigned char)(intensity * 31.0f);
-  return color * 32 + shade;
+  shade = (unsigned char)(intensity * 63.0f);
+  return color * 64 + shade;
 }
 
 void set_mode(unsigned char mode) {
@@ -602,45 +598,68 @@ vector3_t compute_triangle_normal(vector3_t *v0, vector3_t *v1, vector3_t *v2) {
 
 float compute_illumination(vector3_t *vertex, vector3_t *normal,
                            camera_t *camera, light_t *lights, int light_len) {
-  float illumination = 0.0f, cos_alpha;
-  vector3_t vl;
+  float illumination = 0.0f;
+  float normal_len = vec3_len(normal);
   int l;
 
   for (l = 0; l < light_len; l++) {
     light_t *curr_light = &lights[l];
+    vector3_t light_vec;
+    float cos_angle;
+    float light_len;
 
+    /* Handle ambient light */
     if (curr_light->type == AMBIENT_LIGHT) {
       illumination += curr_light->intensity;
       continue;
     }
 
+    /* Get light vector depending on light type */
     if (curr_light->type == DIRECTIONAL_LIGHT) {
-      vector4_t light_vector = vec4_make(
-          curr_light->vector.x, curr_light->vector.y, curr_light->vector.z, 1);
-      mat4x4_t camera_matrix = mat4x4_transpose(&camera->orientation);
-      vector4_t rotated_light =
-          mat4x4_mul_vector4(&camera_matrix, &light_vector);
+      vector4_t light_vector;
+      vector4_t rotated;
+      mat4x4_t camera_transposed;
 
-      vl = vec3_make(rotated_light.x, rotated_light.y, rotated_light.z);
-    } else if (curr_light->type == POINT_LIGHT) {
-      vector4_t light_vector = vec4_make(
-          curr_light->vector.x, curr_light->vector.y, curr_light->vector.z, 1);
-      vector3_t camera_pos_inv = vec3_mul(&camera->position, -1);
-      mat4x4_t camera_translation = mat4x4_translate_vector3(&camera_pos_inv);
-      mat4x4_t camera_transposed = mat4x4_transpose(&camera->orientation);
-      mat4x4_t camera_matrix =
-          mat4x4_mul_mat4x4(&camera_transposed, &camera_translation);
-      vector4_t transformed_light =
-          mat4x4_mul_vector4(&camera_matrix, &light_vector);
-      vector3_t transformed_light_v3 = vec3_make(
-          transformed_light.x, transformed_light.y, transformed_light.z);
-      vector3_t vertex_inv = vec3_mul(vertex, -1);
-      vl = vec3_add(&vertex_inv, &transformed_light_v3);
+      /* Transform directional light to camera space */
+      light_vector = vec4_make(curr_light->vector.x, curr_light->vector.y,
+                               curr_light->vector.z, 1);
+
+      camera_transposed = mat4x4_transpose(&camera->orientation);
+      rotated = mat4x4_mul_vector4(&camera_transposed, &light_vector);
+      light_vec = vec3_make(rotated.x, rotated.y, rotated.z);
+    } else { /* POINT_LIGHT */
+      vector4_t light_vector;
+      vector3_t cam_pos_inv;
+      vector4_t transformed;
+      vector3_t light_pos_cam;
+      vector3_t vertex_inv;
+      mat4x4_t cam_translation, cam_transposed, cam_transform;
+
+      /* Transform light position to camera space */
+      light_vector = vec4_make(curr_light->vector.x, curr_light->vector.y,
+                               curr_light->vector.z, 1);
+
+      /* Create camera space transformation matrix */
+      cam_pos_inv = vec3_mul(&camera->position, -1);
+      cam_translation = mat4x4_translate_vector3(&cam_pos_inv);
+      cam_transposed = mat4x4_transpose(&camera->orientation);
+      cam_transform = mat4x4_mul_mat4x4(&cam_transposed, &cam_translation);
+
+      /* Apply transformation */
+      transformed = mat4x4_mul_vector4(&cam_transform, &light_vector);
+      light_pos_cam = vec3_make(transformed.x, transformed.y, transformed.z);
+
+      /* Get vector from vertex to light */
+      vertex_inv = vec3_mul(vertex, -1);
+      light_vec = vec3_add(&vertex_inv, &light_pos_cam);
     }
 
-    cos_alpha = vec3_dot(normal, &vl) / (vec3_len(&vl) * vec3_len(normal));
-    if (cos_alpha > 0) {
-      illumination += cos_alpha * curr_light->intensity;
+    /* Calculate diffuse lighting contribution */
+    light_len = vec3_len(&light_vec);
+    cos_angle = vec3_dot(normal, &light_vec) / (normal_len * light_len);
+
+    if (cos_angle > 0) {
+      illumination += cos_angle * curr_light->intensity;
     }
   }
 
@@ -1036,7 +1055,7 @@ int main(void) {
   set_mode(0x13);
   init_palette();
   init_depth_buffer();
-  clear_screen(shade_color(7, 31) /* White */);
+  clear_screen(shade_color(3, 63) /* White */);
 
   // Render the scene
   render_scene(&camera, instances, 4, lights, 3);
